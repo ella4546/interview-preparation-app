@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import {
     Attempt,
     computeStats,
@@ -25,7 +25,7 @@ const DEFAULT_TOPICS: { slug: string; label: string }[] = [
     { slug: 'algorithms', label: 'Algorithms' },
     { slug: 'operating_systems', label: 'Operating systems' },
 ];
-// Broader list of topics for autocomplete
+
 const TOPIC_SUGGESTIONS: string[] = [
     'Data structures', 'Algorithms', 'System design', 'Network security',
     'SQL and databases', 'Operating systems',
@@ -54,7 +54,6 @@ const TOPIC_SUGGESTIONS: string[] = [
 function labelFor(slug: string): string {
     const preset = DEFAULT_TOPICS.find((t) => t.slug === slug);
     if (preset) return preset.label;
-    // Turn "react hooks" or "react_hooks" → "React hooks"
     const cleaned = slug.replace(/_/g, ' ').trim();
     return cleaned.charAt(0).toUpperCase() + cleaned.slice(1);
 }
@@ -74,18 +73,16 @@ function loadRecentTopics(): string[] {
     }
 }
 
-function saveRecentTopics(topics: string[]) {
-    if (typeof window === 'undefined') return;
-    try {
-        window.localStorage.setItem(RECENT_TOPICS_KEY, JSON.stringify(topics));
-    } catch {
-        // Ignore localStorage errors.
-    }
-}
-
 function normalizeTopic(input: string): string {
     return input.trim().toLowerCase().replace(/\s+/g, ' ');
 }
+
+// ============================================================
+// Screen + Interview types
+// ============================================================
+
+type Screen = 'dashboard' | 'question' | 'feedback' | 'profile' | 'interview';
+type InterviewTurn = { role: 'interviewer' | 'candidate'; content: string };
 
 // ============================================================
 // Root
@@ -124,7 +121,7 @@ export default function App() {
 }
 
 // ============================================================
-// Sign in / Sign up
+// Sign in / Sign up (unchanged from your version)
 // ============================================================
 
 function AuthScreens() {
@@ -150,10 +147,7 @@ function AuthScreens() {
                 });
                 if (error) throw error;
             } else if (mode === 'signin') {
-                const { error } = await supabase.auth.signInWithPassword({
-                    email,
-                    password,
-                });
+                const { error } = await supabase.auth.signInWithPassword({ email, password });
                 if (error) throw error;
             } else {
                 const { error } = await supabase.auth.resetPasswordForEmail(email, {
@@ -169,152 +163,49 @@ function AuthScreens() {
         }
     }
 
-    const title =
-        mode === 'signin'
-            ? 'Welcome back'
-            : mode === 'signup'
-                ? 'Create your account'
-                : 'Reset your password';
-    const subtitle =
-        mode === 'signin'
-            ? 'Sign in to keep your streak going'
-            : mode === 'signup'
-                ? 'Start practicing in under a minute'
-                : "We'll email you a reset link";
-    const cta =
-        mode === 'signin'
-            ? 'Sign in'
-            : mode === 'signup'
-                ? 'Create account'
-                : 'Send reset link';
+    const title = mode === 'signin' ? 'Welcome back' : mode === 'signup' ? 'Create your account' : 'Reset your password';
+    const subtitle = mode === 'signin' ? 'Sign in to keep your streak going' : mode === 'signup' ? 'Start practicing in under a minute' : "We'll email you a reset link";
+    const cta = mode === 'signin' ? 'Sign in' : mode === 'signup' ? 'Create account' : 'Send reset link';
 
     return (
         <div className="min-h-screen bg-[#f4efe4]">
             <header className="border-b border-stone-200">
                 <div className="mx-auto max-w-3xl px-6 py-4">
-                    <span className="text-base font-semibold tracking-tight">
-                        Interview prep
-                    </span>
+                    <span className="text-base font-semibold tracking-tight">Interview prep</span>
                 </div>
             </header>
-
             <main className="mx-auto mt-12 max-w-sm px-6">
-                <form
-                    onSubmit={submit}
-                    className="rounded-2xl border border-stone-200 bg-white p-8"
-                >
+                <form onSubmit={submit} className="rounded-2xl border border-stone-200 bg-white p-8">
                     <div className="text-center">
                         <h1 className="text-xl font-semibold tracking-tight">{title}</h1>
                         <p className="mt-1 text-sm text-stone-500">{subtitle}</p>
                     </div>
-
-                    {error && (
-                        <div className="mt-4 rounded-lg border border-red-200 bg-red-50 p-3 text-xs text-red-800">
-                            {error}
-                        </div>
-                    )}
-                    {info && (
-                        <div className="mt-4 rounded-lg border border-emerald-200 bg-emerald-50 p-3 text-xs text-emerald-800">
-                            {info}
-                        </div>
-                    )}
-
+                    {error && <div className="mt-4 rounded-lg border border-red-200 bg-red-50 p-3 text-xs text-red-800">{error}</div>}
+                    {info && <div className="mt-4 rounded-lg border border-emerald-200 bg-emerald-50 p-3 text-xs text-emerald-800">{info}</div>}
                     <div className="mt-6 space-y-4">
                         {mode === 'signup' && (
-                            <Field
-                                label="Display name (optional)"
-                                value={displayName}
-                                onChange={setDisplayName}
-                                placeholder="your name"
-                            />
+                            <Field label="Display name (optional)" value={displayName} onChange={setDisplayName} placeholder="your name" />
                         )}
-                        <Field
-                            label="Email"
-                            type="email"
-                            value={email}
-                            onChange={setEmail}
-                            placeholder="you@example.com"
-                            required
-                        />
+                        <Field label="Email" type="email" value={email} onChange={setEmail} placeholder="you@example.com" required />
                         {mode !== 'forgot' && (
-                            <Field
-                                label="Password"
-                                type="password"
-                                value={password}
-                                onChange={setPassword}
-                                minLength={6}
-                                required
-                            />
+                            <Field label="Password" type="password" value={password} onChange={setPassword} minLength={6} required />
                         )}
-                        <button
-                            type="submit"
-                            disabled={busy}
-                            className="w-full rounded-lg bg-stone-900 px-4 py-2.5 text-sm font-medium text-white transition hover:bg-stone-800 disabled:opacity-50"
-                        >
+                        <button type="submit" disabled={busy} className="w-full rounded-lg bg-stone-900 px-4 py-2.5 text-sm font-medium text-white transition hover:bg-stone-800 disabled:opacity-50">
                             {busy ? 'Working…' : cta}
                         </button>
                     </div>
-
                     <div className="mt-6 space-y-2 text-center text-xs text-stone-500">
                         {mode === 'signin' && (
                             <>
-                                <button
-                                    type="button"
-                                    onClick={() => {
-                                        setMode('forgot');
-                                        setError(null);
-                                        setInfo(null);
-                                    }}
-                                    className="font-medium text-stone-700 underline underline-offset-2"
-                                >
-                                    Forgot password?
-                                </button>
-                                <p>
-                                    Don't have an account?{' '}
-                                    <button
-                                        type="button"
-                                        onClick={() => {
-                                            setMode('signup');
-                                            setError(null);
-                                            setInfo(null);
-                                        }}
-                                        className="font-medium text-stone-800 underline underline-offset-2"
-                                    >
-                                        Sign up
-                                    </button>
-                                </p>
+                                <button type="button" onClick={() => { setMode('forgot'); setError(null); setInfo(null); }} className="font-medium text-stone-700 underline underline-offset-2">Forgot password?</button>
+                                <p>Don't have an account? <button type="button" onClick={() => { setMode('signup'); setError(null); setInfo(null); }} className="font-medium text-stone-800 underline underline-offset-2">Sign up</button></p>
                             </>
                         )}
                         {mode === 'signup' && (
-                            <p>
-                                Already have one?{' '}
-                                <button
-                                    type="button"
-                                    onClick={() => {
-                                        setMode('signin');
-                                        setError(null);
-                                        setInfo(null);
-                                    }}
-                                    className="font-medium text-stone-800 underline underline-offset-2"
-                                >
-                                    Sign in
-                                </button>
-                            </p>
+                            <p>Already have one? <button type="button" onClick={() => { setMode('signin'); setError(null); setInfo(null); }} className="font-medium text-stone-800 underline underline-offset-2">Sign in</button></p>
                         )}
                         {mode === 'forgot' && (
-                            <p>
-                                <button
-                                    type="button"
-                                    onClick={() => {
-                                        setMode('signin');
-                                        setError(null);
-                                        setInfo(null);
-                                    }}
-                                    className="font-medium text-stone-800 underline underline-offset-2"
-                                >
-                                    Back to sign in
-                                </button>
-                            </p>
+                            <p><button type="button" onClick={() => { setMode('signin'); setError(null); setInfo(null); }} className="font-medium text-stone-800 underline underline-offset-2">Back to sign in</button></p>
                         )}
                     </div>
                 </form>
@@ -323,44 +214,14 @@ function AuthScreens() {
     );
 }
 
-function Field({
-    label,
-    value,
-    onChange,
-    type = 'text',
-    placeholder,
-    required,
-    minLength,
-}: {
-    label: string;
-    value: string;
-    onChange: (v: string) => void;
-    type?: string;
-    placeholder?: string;
-    required?: boolean;
-    minLength?: number;
-}) {
+function Field({ label, value, onChange, type = 'text', placeholder, required, minLength }: { label: string; value: string; onChange: (v: string) => void; type?: string; placeholder?: string; required?: boolean; minLength?: number; }) {
     return (
         <div>
-            <label className="mb-1 block text-xs font-medium uppercase tracking-wide text-stone-600">
-                {label}
-            </label>
-            <input
-                type={type}
-                value={value}
-                onChange={(e) => onChange(e.target.value)}
-                placeholder={placeholder}
-                required={required}
-                minLength={minLength}
-                className="w-full rounded-lg border border-stone-200 bg-white px-3 py-2 text-sm focus:border-stone-400 focus:outline-none"
-            />
+            <label className="mb-1 block text-xs font-medium uppercase tracking-wide text-stone-600">{label}</label>
+            <input type={type} value={value} onChange={(e) => onChange(e.target.value)} placeholder={placeholder} required={required} minLength={minLength} className="w-full rounded-lg border border-stone-200 bg-white px-3 py-2 text-sm focus:border-stone-400 focus:outline-none" />
         </div>
     );
 }
-
-// ============================================================
-// Password recovery (arrived via email link)
-// ============================================================
 
 function PasswordRecoveryScreen({ onDone }: { onDone: () => void }) {
     const [pw, setPw] = useState('');
@@ -389,47 +250,19 @@ function PasswordRecoveryScreen({ onDone }: { onDone: () => void }) {
         <div className="min-h-screen bg-[#f4efe4]">
             <header className="border-b border-stone-200">
                 <div className="mx-auto max-w-3xl px-6 py-4">
-                    <span className="text-base font-semibold tracking-tight">
-                        Interview prep
-                    </span>
+                    <span className="text-base font-semibold tracking-tight">Interview prep</span>
                 </div>
             </header>
             <main className="mx-auto mt-12 max-w-sm px-6">
-                <form
-                    onSubmit={submit}
-                    className="rounded-2xl border border-stone-200 bg-white p-8"
-                >
-                    <h1 className="text-center text-xl font-semibold tracking-tight">
-                        Set a new password
-                    </h1>
-                    <p className="mt-1 text-center text-sm text-stone-500">
-                        You'll be signed in after this
-                    </p>
-                    {error && (
-                        <div className="mt-4 rounded-lg border border-red-200 bg-red-50 p-3 text-xs text-red-800">
-                            {error}
-                        </div>
-                    )}
-                    {ok && (
-                        <div className="mt-4 rounded-lg border border-emerald-200 bg-emerald-50 p-3 text-xs text-emerald-800">
-                            Password updated. Redirecting…
-                        </div>
-                    )}
+                <form onSubmit={submit} className="rounded-2xl border border-stone-200 bg-white p-8">
+                    <h1 className="text-center text-xl font-semibold tracking-tight">Set a new password</h1>
+                    <p className="mt-1 text-center text-sm text-stone-500">You'll be signed in after this</p>
+                    {error && <div className="mt-4 rounded-lg border border-red-200 bg-red-50 p-3 text-xs text-red-800">{error}</div>}
+                    {ok && <div className="mt-4 rounded-lg border border-emerald-200 bg-emerald-50 p-3 text-xs text-emerald-800">Password updated. Redirecting…</div>}
                     <div className="mt-6">
-                        <Field
-                            label="New password"
-                            type="password"
-                            value={pw}
-                            onChange={setPw}
-                            minLength={6}
-                            required
-                        />
+                        <Field label="New password" type="password" value={pw} onChange={setPw} minLength={6} required />
                     </div>
-                    <button
-                        type="submit"
-                        disabled={busy}
-                        className="mt-6 w-full rounded-lg bg-stone-900 px-4 py-2.5 text-sm font-medium text-white transition hover:bg-stone-800 disabled:opacity-50"
-                    >
+                    <button type="submit" disabled={busy} className="mt-6 w-full rounded-lg bg-stone-900 px-4 py-2.5 text-sm font-medium text-white transition hover:bg-stone-800 disabled:opacity-50">
                         {busy ? 'Saving…' : 'Save password'}
                     </button>
                 </form>
@@ -442,17 +275,13 @@ function PasswordRecoveryScreen({ onDone }: { onDone: () => void }) {
 // Authenticated app
 // ============================================================
 
-type Screen = 'dashboard' | 'question' | 'feedback' | 'profile';
-
 function AuthedApp({ session }: { session: Session }) {
     const user = session.user;
     const [screen, setScreen] = useState<Screen>('dashboard');
     const [profile, setProfile] = useState<Profile | null>(null);
     const [attempts, setAttempts] = useState<Attempt[]>([]);
     const [stats, setStats] = useState<Stats>(computeStats([]));
-    const [popularTopics, setPopularTopics] = useState<
-        { slug: string; attempts: number }[]
-    >([]);
+    const [popularTopics, setPopularTopics] = useState<{ slug: string; attempts: number }[]>([]);
     const [recentQuestions, setRecentQuestions] = useState<string[]>([]);
 
     const [difficulty, setDifficulty] = useState<Difficulty>('medium');
@@ -469,15 +298,16 @@ function AuthedApp({ session }: { session: Session }) {
     const [loading, setLoading] = useState(false);
     const [error, setError] = useState<string | null>(null);
 
+    // Interview state
+    const [interviewFocus, setInterviewFocus] = useState<string>('');
+    const [interviewTranscript, setInterviewTranscript] = useState<InterviewTurn[]>([]);
+    const [interviewLoading, setInterviewLoading] = useState(false);
+    const [showInterviewPicker, setShowInterviewPicker] = useState(false);
+
     const loadAll = useCallback(async () => {
         const [{ data: p }, { data: a }, { data: pop }] = await Promise.all([
             supabase.from('profiles').select('*').eq('user_id', user.id).single(),
-            supabase
-                .from('attempts')
-                .select('*')
-                .eq('user_id', user.id)
-                .order('created_at', { ascending: false })
-                .limit(500),
+            supabase.from('attempts').select('*').eq('user_id', user.id).order('created_at', { ascending: false }).limit(500),
             supabase.rpc('get_popular_topics', { limit_count: 6 }),
         ]);
         if (p) {
@@ -489,18 +319,11 @@ function AuthedApp({ session }: { session: Session }) {
             setStats(computeStats(a as Attempt[]));
         }
         if (pop && Array.isArray(pop)) {
-            setPopularTopics(
-                pop.map((row: any) => ({
-                    slug: row.topic as string,
-                    attempts: Number(row.attempts) || 0,
-                }))
-            );
+            setPopularTopics(pop.map((row: any) => ({ slug: row.topic as string, attempts: Number(row.attempts) || 0 })));
         }
     }, [user.id]);
 
-    useEffect(() => {
-        loadAll();
-    }, [loadAll]);
+    useEffect(() => { loadAll(); }, [loadAll]);
 
     async function startSession(topic: Topic) {
         const clean = normalizeTopic(topic);
@@ -552,12 +375,7 @@ function AuthedApp({ session }: { session: Session }) {
         setError(null);
         setLoading(true);
         try {
-            const result = await api.gradeAnswer(
-                question.id,
-                question.question_text,
-                answer,
-                hintsUsed
-            );
+            const result = await api.gradeAnswer(question.id, question.question_text, answer, hintsUsed);
             setFeedback(result);
             setScreen('feedback');
             await supabase.from('attempts').insert({
@@ -577,14 +395,10 @@ function AuthedApp({ session }: { session: Session }) {
                 const missed = result.missed_concepts?.[0];
                 const strong = result.strong_concepts?.[0];
                 const focus = missed || strong || '';
-                const query = focus
-                    ? `${question.topic} ${focus} programming tutorial`
-                    : `${question.topic} programming tutorial for developers`;
+                const query = focus ? `${question.topic} ${focus} programming tutorial` : `${question.topic} programming tutorial for developers`;
                 const v = await api.getVideos(query);
                 setVideos(v.videos);
-            } catch {
-                /* videos optional */
-            }
+            } catch { /* videos optional */ }
         } catch (e) {
             setError(e instanceof Error ? e.message : 'Something went wrong');
         } finally {
@@ -619,8 +433,56 @@ function AuthedApp({ session }: { session: Session }) {
         setQuestionIndex(1);
     }
 
-    const displayName =
-        profile?.display_name || user.email?.split('@')[0] || 'there';
+    // Interview flow
+    const displayName = profile?.display_name || user.email?.split('@')[0] || 'there';
+
+    async function beginInterview(focus: string) {
+        setInterviewFocus(focus);
+        setInterviewTranscript([]);
+        setInterviewLoading(true);
+        setShowInterviewPicker(false);
+        setScreen('interview');
+        try {
+            const r = await api.startInterview(focus, displayName);
+            setInterviewTranscript([{ role: 'interviewer', content: r.opening_message }]);
+        } catch (e) {
+            setError(e instanceof Error ? e.message : 'Failed to start interview');
+            setScreen('dashboard');
+        } finally {
+            setInterviewLoading(false);
+        }
+    }
+
+    async function sendInterviewMessage(message: string) {
+        const trimmed = message.trim();
+        if (!trimmed) return;
+        const updated: InterviewTurn[] = [...interviewTranscript, { role: 'candidate', content: trimmed }];
+        setInterviewTranscript(updated);
+        setInterviewLoading(true);
+        try {
+            const r = await api.nextInterviewTurn(interviewFocus, updated);
+            setInterviewTranscript([...updated, { role: 'interviewer', content: r.interviewer_message }]);
+        } catch (e) {
+            setError(e instanceof Error ? e.message : 'Failed to continue interview');
+        } finally {
+            setInterviewLoading(false);
+        }
+    }
+
+    async function endInterview() {
+        try {
+            await supabase.from('interview_sessions').insert({
+                user_id: user.id,
+                focus: interviewFocus,
+                transcript: interviewTranscript,
+                status: 'completed',
+                turns_completed: Math.floor(interviewTranscript.length / 2),
+            });
+        } catch { /* non-blocking */ }
+        setScreen('dashboard');
+        setInterviewTranscript([]);
+        setInterviewFocus('');
+    }
 
     return (
         <div className="min-h-screen bg-[#f4efe4] text-stone-900">
@@ -641,12 +503,10 @@ function AuthedApp({ session }: { session: Session }) {
                         attempts={attempts}
                         onDifficulty={async (d) => {
                             setDifficulty(d);
-                            await supabase
-                                .from('profiles')
-                                .update({ preferred_difficulty: d })
-                                .eq('user_id', user.id);
+                            await supabase.from('profiles').update({ preferred_difficulty: d }).eq('user_id', user.id);
                         }}
                         onStart={startSession}
+                        onStartInterview={() => setShowInterviewPicker(true)}
                         loading={loading}
                     />
                 )}
@@ -680,6 +540,16 @@ function AuthedApp({ session }: { session: Session }) {
                     />
                 )}
 
+                {screen === 'interview' && (
+                    <InterviewScreen
+                        focus={interviewFocus}
+                        transcript={interviewTranscript}
+                        loading={interviewLoading}
+                        onSend={sendInterviewMessage}
+                        onEnd={endInterview}
+                    />
+                )}
+
                 {screen === 'profile' && profile && (
                     <ProfileScreen
                         profile={profile}
@@ -690,28 +560,24 @@ function AuthedApp({ session }: { session: Session }) {
                     />
                 )}
             </main>
+
+            {showInterviewPicker && (
+                <InterviewPicker
+                    onCancel={() => setShowInterviewPicker(false)}
+                    onPick={beginInterview}
+                />
+            )}
         </div>
     );
-}
-
-// ============================================================
-// Nav — no email displayed
+}// ============================================================
+// Nav
 // ============================================================
 
-function TopNav({
-    current,
-    onNavigate,
-}: {
-    current: Screen;
-    onNavigate: (s: Screen) => void;
-}) {
+function TopNav({ current, onNavigate }: { current: Screen; onNavigate: (s: Screen) => void; }) {
     const link = (label: string, target: Screen) => (
         <button
             onClick={() => onNavigate(target)}
-            className={`text-sm transition ${current === target
-                ? 'font-semibold text-stone-900'
-                : 'text-stone-500 hover:text-stone-800'
-                }`}
+            className={`text-sm transition ${current === target ? 'font-semibold text-stone-900' : 'text-stone-500 hover:text-stone-800'}`}
         >
             {label}
         </button>
@@ -719,10 +585,7 @@ function TopNav({
     return (
         <header className="border-b border-stone-200 bg-[#f4efe4]">
             <div className="mx-auto flex max-w-3xl items-center justify-between px-6 py-4">
-                <button
-                    onClick={() => onNavigate('dashboard')}
-                    className="text-base font-semibold tracking-tight"
-                >
+                <button onClick={() => onNavigate('dashboard')} className="text-base font-semibold tracking-tight">
                     Interview prep
                 </button>
                 <nav className="flex items-center gap-5">
@@ -735,7 +598,7 @@ function TopNav({
 }
 
 // ============================================================
-// Dashboard — with search + popular topics
+// Dashboard
 // ============================================================
 
 function Dashboard({
@@ -746,6 +609,7 @@ function Dashboard({
     attempts,
     onDifficulty,
     onStart,
+    onStartInterview,
     loading,
 }: {
     displayName: string;
@@ -755,6 +619,7 @@ function Dashboard({
     attempts: Attempt[];
     onDifficulty: (d: Difficulty) => void;
     onStart: (t: Topic) => void;
+    onStartInterview: () => void;
     loading: boolean;
 }) {
     const [search, setSearch] = useState('');
@@ -763,24 +628,17 @@ function Dashboard({
 
     const query = search.trim().toLowerCase();
 
-    // Popular OR default topics as base list
     const basePopular = popularTopics.length > 0
         ? popularTopics.map((p) => ({ slug: p.slug, attempts: p.attempts }))
         : DEFAULT_TOPICS.map((t) => ({ slug: t.slug, attempts: 0 }));
 
-    // Build a de-duplicated pool of every topic we could show
-    const pool = Array.from(
-        new Set([
-            ...TOPIC_SUGGESTIONS.map((s) => normalizeTopic(s)),
-            ...recent,
-            ...basePopular.map((p) => p.slug),
-        ])
-    );
+    const pool = Array.from(new Set([
+        ...TOPIC_SUGGESTIONS.map((s) => normalizeTopic(s)),
+        ...recent,
+        ...basePopular.map((p) => p.slug),
+    ]));
 
-    // When user has typed something, filter the pool
-    const filtered = query
-        ? pool.filter((slug) => slug.includes(query)).slice(0, 12)
-        : [];
+    const filtered = query ? pool.filter((slug) => slug.includes(query)).slice(0, 12) : [];
 
     function submitSearch(e: React.FormEvent) {
         e.preventDefault();
@@ -801,21 +659,13 @@ function Dashboard({
             <section className="rounded-2xl border border-stone-200 bg-white p-6">
                 <div className="mb-1 flex items-start justify-between gap-4">
                     <div>
-                        <h1 className="text-2xl font-semibold tracking-tight">
-                            Welcome back, {displayName}
-                        </h1>
-                        <p className="mt-1 text-sm text-stone-500">
-                            Level {stats.level} · Practice track
-                        </p>
+                        <h1 className="text-2xl font-semibold tracking-tight">Welcome back, {displayName}</h1>
+                        <p className="mt-1 text-sm text-stone-500">Level {stats.level} · Practice track</p>
                     </div>
-                    <button
-                        onClick={() => setShowCalendar(true)}
-                        className="rounded-full border border-stone-200 bg-stone-50 px-3 py-1 text-xs font-medium text-stone-700 transition hover:border-stone-300 hover:bg-white"
-                    >
+                    <button onClick={() => setShowCalendar(true)} className="rounded-full border border-stone-200 bg-stone-50 px-3 py-1 text-xs font-medium text-stone-700 transition hover:border-stone-300 hover:bg-white">
                         🔥 {stats.streak} day streak
                     </button>
                 </div>
-
                 <div className="mt-6 grid grid-cols-2 gap-3 sm:grid-cols-4">
                     <Stat label="Solved" value={stats.solved.toString()} />
                     <Stat label="Accuracy" value={`${stats.accuracy}%`} />
@@ -825,82 +675,56 @@ function Dashboard({
             </section>
 
             <section className="rounded-2xl border border-stone-200 bg-white p-6">
-                <h2 className="text-lg font-semibold tracking-tight">
-                    Start today's session
-                </h2>
-                <p className="mt-1 text-sm text-stone-500">
-                    Search any topic or pick one below · typed answers · hints available
-                </p>
+                <h2 className="text-lg font-semibold tracking-tight">Start today's session</h2>
+                <p className="mt-1 text-sm text-stone-500">Search any topic or pick one below · typed answers · hints available</p>
 
                 <form onSubmit={submitSearch} className="mt-4 flex gap-2">
-                    <input
-                        value={search}
-                        onChange={(e) => setSearch(e.target.value)}
-                        placeholder="e.g. Web design, React hooks, Kubernetes…"
-                        className="flex-1 rounded-lg border border-stone-200 bg-white px-3 py-2 text-sm placeholder-stone-400 focus:border-stone-400 focus:outline-none"
-                    />
-                    <button
-                        type="submit"
-                        disabled={loading || !search.trim()}
-                        className="rounded-lg bg-stone-900 px-4 py-2 text-sm font-medium text-white transition hover:bg-stone-800 disabled:opacity-50"
-                    >
+                    <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="e.g. Web design, React hooks, Kubernetes…" className="flex-1 rounded-lg border border-stone-200 bg-white px-3 py-2 text-sm placeholder-stone-400 focus:border-stone-400 focus:outline-none" />
+                    <button type="submit" disabled={loading || !search.trim()} className="rounded-lg bg-stone-900 px-4 py-2 text-sm font-medium text-white transition hover:bg-stone-800 disabled:opacity-50">
                         {loading ? 'Searching…' : 'Search'}
                     </button>
                 </form>
 
                 <div className="mt-4 flex flex-wrap gap-2">
                     {(['easy', 'medium', 'hard'] as Difficulty[]).map((d) => (
-                        <button
-                            key={d}
-                            onClick={() => onDifficulty(d)}
-                            className={`rounded-full px-3 py-1 text-xs font-medium capitalize transition ${difficulty === d
-                                ? 'bg-stone-900 text-white'
-                                : 'border border-stone-200 bg-white text-stone-600 hover:border-stone-300'
-                                }`}
-                        >
+                        <button key={d} onClick={() => onDifficulty(d)} className={`rounded-full px-3 py-1 text-xs font-medium capitalize transition ${difficulty === d ? 'bg-stone-900 text-white' : 'border border-stone-200 bg-white text-stone-600 hover:border-stone-300'}`}>
                             {d}
                         </button>
                     ))}
                 </div>
+
+                <button
+                    onClick={onStartInterview}
+                    className="mt-5 flex w-full items-center justify-between rounded-xl border border-stone-900 bg-stone-900 px-4 py-3 text-left text-white transition hover:bg-stone-800"
+                >
+                    <div>
+                        <div className="text-sm font-semibold">Start a mock interview</div>
+                        <div className="text-xs text-stone-300">Full conversational interview with AI · ~15 min</div>
+                    </div>
+                    <span className="text-lg">→</span>
+                </button>
             </section>
 
             {query ? (
                 <section className="rounded-2xl border border-stone-200 bg-white p-6">
                     <div className="mb-4 flex items-baseline justify-between">
-                        <h2 className="text-lg font-semibold tracking-tight">
-                            Results for "{search}"
-                        </h2>
-                        <span className="text-xs text-stone-500">
-                            {filtered.length} match{filtered.length === 1 ? '' : 'es'}
-                        </span>
+                        <h2 className="text-lg font-semibold tracking-tight">Results for "{search}"</h2>
+                        <span className="text-xs text-stone-500">{filtered.length} match{filtered.length === 1 ? '' : 'es'}</span>
                     </div>
                     {filtered.length > 0 ? (
                         <div className="space-y-2">
                             {filtered.map((slug) => (
-                                <button
-                                    key={slug}
-                                    onClick={() => pickTopic(slug)}
-                                    disabled={loading}
-                                    className="group flex w-full items-center justify-between rounded-xl border border-stone-100 bg-stone-50 px-4 py-3 text-left transition hover:border-stone-300 hover:bg-white disabled:opacity-50"
-                                >
+                                <button key={slug} onClick={() => pickTopic(slug)} disabled={loading} className="group flex w-full items-center justify-between rounded-xl border border-stone-100 bg-stone-50 px-4 py-3 text-left transition hover:border-stone-300 hover:bg-white disabled:opacity-50">
                                     <div>
-                                        <div className="text-sm font-medium text-stone-900">
-                                            {labelFor(slug)}
-                                        </div>
-                                        <div className="text-xs text-stone-500">
-                                            {recent.includes(slug) ? 'Recently searched' : 'Suggested'}
-                                        </div>
+                                        <div className="text-sm font-medium text-stone-900">{labelFor(slug)}</div>
+                                        <div className="text-xs text-stone-500">{recent.includes(slug) ? 'Recently searched' : 'Suggested'}</div>
                                     </div>
-                                    <span className="text-xs text-stone-400 group-hover:text-stone-700">
-                                        Practice →
-                                    </span>
+                                    <span className="text-xs text-stone-400 group-hover:text-stone-700">Practice →</span>
                                 </button>
                             ))}
                         </div>
                     ) : (
-                        <p className="text-sm text-stone-600">
-                            No matching topics — click <b>Search</b> to try "{search}" anyway.
-                        </p>
+                        <p className="text-sm text-stone-600">No matching topics — click <b>Search</b> to try "{search}" anyway.</p>
                     )}
                 </section>
             ) : (
@@ -908,28 +732,17 @@ function Dashboard({
                     {recent.length > 0 && (
                         <section className="rounded-2xl border border-stone-200 bg-white p-6">
                             <div className="mb-4 flex items-baseline justify-between">
-                                <h2 className="text-lg font-semibold tracking-tight">
-                                    Your recent topics
-                                </h2>
+                                <h2 className="text-lg font-semibold tracking-tight">Your recent topics</h2>
                                 <span className="text-xs text-stone-500">Just for you</span>
                             </div>
                             <div className="space-y-2">
                                 {recent.map((slug) => (
-                                    <button
-                                        key={slug}
-                                        onClick={() => pickTopic(slug)}
-                                        disabled={loading}
-                                        className="group flex w-full items-center justify-between rounded-xl border border-stone-100 bg-stone-50 px-4 py-3 text-left transition hover:border-stone-300 hover:bg-white disabled:opacity-50"
-                                    >
+                                    <button key={slug} onClick={() => pickTopic(slug)} disabled={loading} className="group flex w-full items-center justify-between rounded-xl border border-stone-100 bg-stone-50 px-4 py-3 text-left transition hover:border-stone-300 hover:bg-white disabled:opacity-50">
                                         <div>
-                                            <div className="text-sm font-medium text-stone-900">
-                                                {labelFor(slug)}
-                                            </div>
+                                            <div className="text-sm font-medium text-stone-900">{labelFor(slug)}</div>
                                             <div className="text-xs text-stone-500">Recently searched</div>
                                         </div>
-                                        <span className="text-xs text-stone-400 group-hover:text-stone-700">
-                                            Practice →
-                                        </span>
+                                        <span className="text-xs text-stone-400 group-hover:text-stone-700">Practice →</span>
                                     </button>
                                 ))}
                             </div>
@@ -938,52 +751,25 @@ function Dashboard({
 
                     <section className="rounded-2xl border border-stone-200 bg-white p-6">
                         <div className="mb-4 flex items-baseline justify-between">
-                            <h2 className="text-lg font-semibold tracking-tight">
-                                {popularTopics.length > 0 ? 'Popular topics' : 'Suggested topics'}
-                            </h2>
-                            <span className="text-xs text-stone-500">
-                                {popularTopics.length > 0
-                                    ? 'Trending across all users'
-                                    : 'Get started with these'}
-                            </span>
+                            <h2 className="text-lg font-semibold tracking-tight">{popularTopics.length > 0 ? 'Popular topics' : 'Suggested topics'}</h2>
+                            <span className="text-xs text-stone-500">{popularTopics.length > 0 ? 'Trending across all users' : 'Get started with these'}</span>
                         </div>
                         <div className="space-y-2">
-                            {basePopular
-                                .filter((t) => !recent.includes(t.slug))
-                                .map((t) => (
-                                    <button
-                                        key={t.slug}
-                                        onClick={() => pickTopic(t.slug)}
-                                        disabled={loading}
-                                        className="group flex w-full items-center justify-between rounded-xl border border-stone-100 bg-stone-50 px-4 py-3 text-left transition hover:border-stone-300 hover:bg-white disabled:opacity-50"
-                                    >
-                                        <div>
-                                            <div className="text-sm font-medium text-stone-900">
-                                                {labelFor(t.slug)}
-                                            </div>
-                                            <div className="text-xs text-stone-500">
-                                                {t.attempts > 0
-                                                    ? `${t.attempts} attempt${t.attempts === 1 ? '' : 's'} by users`
-                                                    : 'No attempts yet'}
-                                            </div>
-                                        </div>
-                                        <span className="text-xs text-stone-400 group-hover:text-stone-700">
-                                            Start →
-                                        </span>
-                                    </button>
-                                ))}
+                            {basePopular.filter((t) => !recent.includes(t.slug)).map((t) => (
+                                <button key={t.slug} onClick={() => pickTopic(t.slug)} disabled={loading} className="group flex w-full items-center justify-between rounded-xl border border-stone-100 bg-stone-50 px-4 py-3 text-left transition hover:border-stone-300 hover:bg-white disabled:opacity-50">
+                                    <div>
+                                        <div className="text-sm font-medium text-stone-900">{labelFor(t.slug)}</div>
+                                        <div className="text-xs text-stone-500">{t.attempts > 0 ? `${t.attempts} attempt${t.attempts === 1 ? '' : 's'} by users` : 'No attempts yet'}</div>
+                                    </div>
+                                    <span className="text-xs text-stone-400 group-hover:text-stone-700">Start →</span>
+                                </button>
+                            ))}
                         </div>
                     </section>
                 </>
             )}
 
-            {showCalendar && (
-                <StreakCalendar
-                    attempts={attempts}
-                    stats={stats}
-                    onClose={() => setShowCalendar(false)}
-                />
-            )}
+            {showCalendar && <StreakCalendar attempts={attempts} stats={stats} onClose={() => setShowCalendar(false)} />}
         </div>
     );
 }
@@ -991,105 +777,53 @@ function Dashboard({
 function Stat({ label, value }: { label: string; value: string }) {
     return (
         <div className="rounded-xl border border-stone-100 bg-stone-50 p-3">
-            <div className="text-xs uppercase tracking-wide text-stone-500">
-                {label}
-            </div>
+            <div className="text-xs uppercase tracking-wide text-stone-500">{label}</div>
             <div className="mt-1 text-lg font-semibold tracking-tight">{value}</div>
         </div>
     );
 }
 
-// ============================================================
-// Question / Feedback (unchanged from previous batch)
-// ============================================================
-function StreakCalendar({
-    attempts,
-    stats,
-    onClose,
-}: {
-    attempts: Attempt[];
-    stats: Stats;
-    onClose: () => void;
-}) {
-    // Build a set of dates (YYYY-MM-DD) with at least one attempt
-    const activeDays = new Set(
-        attempts.map((a) => new Date(a.created_at).toISOString().slice(0, 10))
-    );
-
-    // Show the last 84 days (12 weeks) in a GitHub-style heatmap
+function StreakCalendar({ attempts, stats, onClose }: { attempts: Attempt[]; stats: Stats; onClose: () => void; }) {
+    const activeDays = new Set(attempts.map((a) => new Date(a.created_at).toISOString().slice(0, 10)));
     const days = 84;
     const today = new Date();
     today.setHours(0, 0, 0, 0);
-
     const cells: { date: Date; key: string; active: boolean; count: number }[] = [];
     for (let i = days - 1; i >= 0; i--) {
         const d = new Date(today);
         d.setDate(today.getDate() - i);
         const key = d.toISOString().slice(0, 10);
-        const count = attempts.filter(
-            (a) => new Date(a.created_at).toISOString().slice(0, 10) === key
-        ).length;
+        const count = attempts.filter((a) => new Date(a.created_at).toISOString().slice(0, 10) === key).length;
         cells.push({ date: d, key, active: activeDays.has(key), count });
     }
-
-    // Chunk into weeks (7-day rows)
     const weeks: typeof cells[] = [];
     for (let i = 0; i < cells.length; i += 7) weeks.push(cells.slice(i, i + 7));
-
-    const monthLabel = today.toLocaleDateString(undefined, {
-        month: 'long',
-        year: 'numeric',
-    });
+    const monthLabel = today.toLocaleDateString(undefined, { month: 'long', year: 'numeric' });
 
     return (
-        <div
-            className="fixed inset-0 z-50 flex items-center justify-center bg-stone-900/40 p-4"
-            onClick={onClose}
-        >
-            <div
-                className="w-full max-w-md rounded-2xl border border-stone-200 bg-white p-6"
-                onClick={(e) => e.stopPropagation()}
-            >
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-stone-900/40 p-4" onClick={onClose}>
+            <div className="w-full max-w-md rounded-2xl border border-stone-200 bg-white p-6" onClick={(e) => e.stopPropagation()}>
                 <div className="mb-4 flex items-center justify-between">
                     <div>
                         <h3 className="text-base font-semibold">Your streak</h3>
                         <p className="text-xs text-stone-500">Last 12 weeks · {monthLabel}</p>
                     </div>
-                    <button
-                        onClick={onClose}
-                        className="text-stone-500 hover:text-stone-800"
-                    >
-                        ✕
-                    </button>
+                    <button onClick={onClose} className="text-stone-500 hover:text-stone-800">✕</button>
                 </div>
-
                 <div className="mb-4 grid grid-cols-3 gap-3">
                     <Stat label="Current" value={`${stats.streak} d`} />
                     <Stat label="Solved" value={stats.solved.toString()} />
                     <Stat label="Days active" value={activeDays.size.toString()} />
                 </div>
-
                 <div className="flex gap-1">
                     {weeks.map((week, wi) => (
                         <div key={wi} className="flex flex-col gap-1">
                             {week.map((cell) => (
-                                <div
-                                    key={cell.key}
-                                    title={`${cell.key}${cell.active ? ` · ${cell.count} attempt${cell.count === 1 ? '' : 's'}` : ' · no activity'}`}
-                                    className={`h-3 w-3 rounded-sm ${cell.count === 0
-                                        ? 'bg-stone-100'
-                                        : cell.count < 3
-                                            ? 'bg-emerald-200'
-                                            : cell.count < 6
-                                                ? 'bg-emerald-400'
-                                                : 'bg-emerald-600'
-                                        }`}
-                                />
+                                <div key={cell.key} title={`${cell.key}${cell.active ? ` · ${cell.count} attempt${cell.count === 1 ? '' : 's'}` : ' · no activity'}`} className={`h-3 w-3 rounded-sm ${cell.count === 0 ? 'bg-stone-100' : cell.count < 3 ? 'bg-emerald-200' : cell.count < 6 ? 'bg-emerald-400' : 'bg-emerald-600'}`} />
                             ))}
                         </div>
                     ))}
                 </div>
-
                 <div className="mt-4 flex items-center justify-end gap-2 text-xs text-stone-500">
                     <span>Less</span>
                     <div className="h-3 w-3 rounded-sm bg-stone-100" />
@@ -1102,82 +836,34 @@ function StreakCalendar({
         </div>
     );
 }
-function QuestionScreen({
-    question,
-    answer,
-    onAnswer,
-    hint,
-    loading,
-    questionIndex,
-    sessionLength,
-    onSubmit,
-    onHint,
-    onBack,
-}: {
-    question: Question;
-    answer: string;
-    onAnswer: (s: string) => void;
-    hint: string | null;
-    loading: boolean;
-    questionIndex: number;
-    sessionLength: number;
-    onSubmit: () => void;
-    onHint: () => void;
-    onBack: () => void;
-}) {
+
+// ============================================================
+// Question / Feedback screens
+// ============================================================
+
+function QuestionScreen({ question, answer, onAnswer, hint, loading, questionIndex, sessionLength, onSubmit, onHint, onBack }: { question: Question; answer: string; onAnswer: (s: string) => void; hint: string | null; loading: boolean; questionIndex: number; sessionLength: number; onSubmit: () => void; onHint: () => void; onBack: () => void; }) {
     return (
         <div className="space-y-4">
-            <button
-                onClick={onBack}
-                className="inline-flex items-center gap-1 text-sm text-stone-500 transition hover:text-stone-900"
-            >
-                ← Back to dashboard
-            </button>
-
+            <button onClick={onBack} className="inline-flex items-center gap-1 text-sm text-stone-500 transition hover:text-stone-900">← Back to dashboard</button>
             <div className="flex items-center justify-between">
-                <div className="text-sm text-stone-500">
-                    Question {questionIndex} of {sessionLength} ·{' '}
-                    <span className="capitalize">{labelFor(question.topic)}</span>
-                </div>
-                <span className="rounded-full border border-stone-200 bg-white px-3 py-1 text-xs font-medium capitalize text-stone-700">
-                    {question.difficulty}
-                </span>
+                <div className="text-sm text-stone-500">Question {questionIndex} of {sessionLength} · <span className="capitalize">{labelFor(question.topic)}</span></div>
+                <span className="rounded-full border border-stone-200 bg-white px-3 py-1 text-xs font-medium capitalize text-stone-700">{question.difficulty}</span>
             </div>
-
             <div className="rounded-2xl border border-stone-200 bg-white p-6">
                 <p className="text-base leading-relaxed">{question.question_text}</p>
             </div>
-
-            <textarea
-                value={answer}
-                onChange={(e) => onAnswer(e.target.value)}
-                placeholder="Type your answer here — explain it like you would to an interviewer."
-                rows={7}
-                className="w-full resize-none rounded-2xl border border-stone-200 bg-white p-5 text-sm leading-relaxed text-stone-900 placeholder-stone-400 focus:border-stone-400 focus:outline-none"
-            />
-
+            <textarea value={answer} onChange={(e) => onAnswer(e.target.value)} placeholder="Type your answer here — explain it like you would to an interviewer." rows={7} className="w-full resize-none rounded-2xl border border-stone-200 bg-white p-5 text-sm leading-relaxed text-stone-900 placeholder-stone-400 focus:border-stone-400 focus:outline-none" />
             {hint && (
                 <div className="rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">
-                    <div className="mb-1 text-xs font-semibold uppercase tracking-wide">
-                        Hint
-                    </div>
+                    <div className="mb-1 text-xs font-semibold uppercase tracking-wide">Hint</div>
                     {hint}
                 </div>
             )}
-
             <div className="flex flex-wrap items-center justify-between gap-3">
-                <button
-                    onClick={onHint}
-                    disabled={loading || hint !== null}
-                    className="rounded-lg border border-stone-200 bg-white px-4 py-2 text-sm text-stone-700 transition hover:border-stone-300 disabled:opacity-50"
-                >
+                <button onClick={onHint} disabled={loading || hint !== null} className="rounded-lg border border-stone-200 bg-white px-4 py-2 text-sm text-stone-700 transition hover:border-stone-300 disabled:opacity-50">
                     {hint ? 'Hint used' : 'Use a hint (−5 pts)'}
                 </button>
-                <button
-                    onClick={onSubmit}
-                    disabled={loading || !answer.trim()}
-                    className="rounded-lg bg-stone-900 px-5 py-2 text-sm font-medium text-white transition hover:bg-stone-800 disabled:opacity-50"
-                >
+                <button onClick={onSubmit} disabled={loading || !answer.trim()} className="rounded-lg bg-stone-900 px-5 py-2 text-sm font-medium text-white transition hover:bg-stone-800 disabled:opacity-50">
                     {loading ? 'Grading…' : 'Submit answer'}
                 </button>
             </div>
@@ -1185,169 +871,68 @@ function QuestionScreen({
     );
 }
 
-function FeedbackScreen({
-    question,
-    answer,
-    feedback,
-    videos,
-    questionIndex,
-    sessionLength,
-    onNext,
-    onExit,
-    loading,
-}: {
-    question: Question;
-    answer: string;
-    feedback: GradeResult;
-    videos: Video[];
-    questionIndex: number;
-    sessionLength: number;
-    onNext: () => void;
-    onExit: () => void;
-    loading: boolean;
-}) {
-    const verdictLabel =
-        feedback.verdict === 'correct'
-            ? 'Correct'
-            : feedback.verdict === 'partial'
-                ? 'Partially correct'
-                : 'Incorrect';
-    const verdictStyles =
-        feedback.verdict === 'correct'
-            ? 'border-emerald-200 bg-emerald-50 text-emerald-800'
-            : feedback.verdict === 'partial'
-                ? 'border-amber-200 bg-amber-50 text-amber-800'
-                : 'border-red-200 bg-red-50 text-red-800';
-
+function FeedbackScreen({ question, answer, feedback, videos, questionIndex, sessionLength, onNext, onExit, loading }: { question: Question; answer: string; feedback: GradeResult; videos: Video[]; questionIndex: number; sessionLength: number; onNext: () => void; onExit: () => void; loading: boolean; }) {
+    const verdictLabel = feedback.verdict === 'correct' ? 'Correct' : feedback.verdict === 'partial' ? 'Partially correct' : 'Incorrect';
+    const verdictStyles = feedback.verdict === 'correct' ? 'border-emerald-200 bg-emerald-50 text-emerald-800' : feedback.verdict === 'partial' ? 'border-amber-200 bg-amber-50 text-amber-800' : 'border-red-200 bg-red-50 text-red-800';
     return (
         <div className="space-y-4">
             <div className="flex items-center justify-between">
-                <div className="text-sm text-stone-500">
-                    Question {questionIndex} of {sessionLength} ·{' '}
-                    <span className="capitalize">{labelFor(question.topic)}</span>
-                </div>
-                <span
-                    className={`rounded-full border px-3 py-1 text-xs font-medium ${verdictStyles}`}
-                >
-                    {verdictLabel}
-                </span>
+                <div className="text-sm text-stone-500">Question {questionIndex} of {sessionLength} · <span className="capitalize">{labelFor(question.topic)}</span></div>
+                <span className={`rounded-full border px-3 py-1 text-xs font-medium ${verdictStyles}`}>{verdictLabel}</span>
             </div>
-
             <div className="rounded-2xl border border-stone-200 bg-white p-6">
-                <div className="text-xs font-semibold uppercase tracking-wide text-stone-500">
-                    Your answer
-                </div>
-                <p className="mt-2 text-sm italic leading-relaxed text-stone-700">
-                    "{answer}"
-                </p>
+                <div className="text-xs font-semibold uppercase tracking-wide text-stone-500">Your answer</div>
+                <p className="mt-2 text-sm italic leading-relaxed text-stone-700">"{answer}"</p>
             </div>
-
             <div className="rounded-2xl border border-stone-200 bg-white p-6">
                 <div className="flex items-start justify-between gap-4">
-                    <div className="text-xs font-semibold uppercase tracking-wide text-stone-500">
-                        Feedback
-                    </div>
-                    <div className="text-lg font-semibold tabular-nums">
-                        {feedback.score}/10
-                    </div>
+                    <div className="text-xs font-semibold uppercase tracking-wide text-stone-500">Feedback</div>
+                    <div className="text-lg font-semibold tabular-nums">{feedback.score}/10</div>
                 </div>
-                <p className="mt-3 text-sm leading-relaxed text-stone-800">
-                    {feedback.feedback}
-                </p>
-
+                <p className="mt-3 text-sm leading-relaxed text-stone-800">{feedback.feedback}</p>
                 {feedback.strong_concepts.length > 0 && (
                     <div className="mt-4">
-                        <div className="text-xs font-semibold uppercase tracking-wide text-emerald-700">
-                            Strong concepts
-                        </div>
+                        <div className="text-xs font-semibold uppercase tracking-wide text-emerald-700">Strong concepts</div>
                         <ul className="mt-1 space-y-0.5 text-sm text-stone-700">
-                            {feedback.strong_concepts.map((c) => (
-                                <li key={c}>· {c}</li>
-                            ))}
+                            {feedback.strong_concepts.map((c) => <li key={c}>· {c}</li>)}
                         </ul>
                     </div>
                 )}
-
                 {feedback.missed_concepts.length > 0 && (
                     <div className="mt-4">
-                        <div className="text-xs font-semibold uppercase tracking-wide text-stone-600">
-                            Missed concepts
-                        </div>
+                        <div className="text-xs font-semibold uppercase tracking-wide text-stone-600">Missed concepts</div>
                         <ul className="mt-1 space-y-0.5 text-sm text-stone-700">
-                            {feedback.missed_concepts.map((c) => (
-                                <li key={c}>· {c}</li>
-                            ))}
+                            {feedback.missed_concepts.map((c) => <li key={c}>· {c}</li>)}
                         </ul>
                     </div>
                 )}
-
-                {feedback.xp_earned > 0 && (
-                    <div className="mt-4 text-xs text-stone-500">
-                        +{feedback.xp_earned} XP earned
-                    </div>
-                )}
+                {feedback.xp_earned > 0 && <div className="mt-4 text-xs text-stone-500">+{feedback.xp_earned} XP earned</div>}
             </div>
-
             {videos.length > 0 && (
                 <div className="space-y-2">
-                    <div className="text-xs font-semibold uppercase tracking-wide text-stone-500">
-                        Recommended videos
-                    </div>
+                    <div className="text-xs font-semibold uppercase tracking-wide text-stone-500">Recommended videos</div>
                     {videos.slice(0, 3).map((v) => (
-                        <a
-                            key={v.video_id}
-                            href={v.url}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            className="group flex items-center gap-4 rounded-2xl border border-stone-200 bg-white p-3 transition hover:border-stone-300"
-                        >
+                        <a key={v.video_id} href={v.url} target="_blank" rel="noopener noreferrer" className="group flex items-center gap-4 rounded-2xl border border-stone-200 bg-white p-3 transition hover:border-stone-300">
                             <div className="relative h-16 w-28 shrink-0 overflow-hidden rounded-lg bg-stone-100">
-                                <img
-                                    src={`https://img.youtube.com/vi/${v.video_id}/mqdefault.jpg`}
-                                    alt=""
-                                    loading="lazy"
-                                    className="h-full w-full object-cover"
-                                    onError={(e) => {
-                                        (e.currentTarget as HTMLImageElement).src =
-                                            `https://img.youtube.com/vi/${v.video_id}/hqdefault.jpg`;
-                                    }}
-                                />
+                                <img src={`https://img.youtube.com/vi/${v.video_id}/mqdefault.jpg`} alt="" loading="lazy" className="h-full w-full object-cover" onError={(e) => { (e.currentTarget as HTMLImageElement).src = `https://img.youtube.com/vi/${v.video_id}/hqdefault.jpg`; }} />
                                 <div className="absolute inset-0 flex items-center justify-center bg-black/0 transition group-hover:bg-black/20">
                                     <div className="flex h-7 w-7 items-center justify-center rounded-full bg-black/70 text-white">
-                                        <svg viewBox="0 0 24 24" fill="currentColor" className="ml-0.5 h-3.5 w-3.5">
-                                            <path d="M8 5v14l11-7z" />
-                                        </svg>
+                                        <svg viewBox="0 0 24 24" fill="currentColor" className="ml-0.5 h-3.5 w-3.5"><path d="M8 5v14l11-7z" /></svg>
                                     </div>
                                 </div>
                             </div>
                             <div className="min-w-0 flex-1">
-                                <div className="truncate text-sm font-medium text-stone-900">
-                                    {v.title}
-                                </div>
-                                <div className="mt-0.5 truncate text-xs text-stone-500">
-                                    {v.channel}
-                                </div>
+                                <div className="truncate text-sm font-medium text-stone-900">{v.title}</div>
+                                <div className="mt-0.5 truncate text-xs text-stone-500">{v.channel}</div>
                             </div>
-                            <span className="shrink-0 rounded-lg border border-stone-200 bg-white px-3 py-1 text-xs font-medium text-stone-700 transition group-hover:border-stone-300">
-                                Watch
-                            </span>
+                            <span className="shrink-0 rounded-lg border border-stone-200 bg-white px-3 py-1 text-xs font-medium text-stone-700 transition group-hover:border-stone-300">Watch</span>
                         </a>
                     ))}
                 </div>
             )}
-
             <div className="flex items-center gap-3 pt-2">
-                <button
-                    onClick={onExit}
-                    className="rounded-lg border border-stone-200 bg-white px-4 py-2 text-sm text-stone-700 transition hover:border-stone-300"
-                >
-                    Exit session
-                </button>
-                <button
-                    onClick={onNext}
-                    disabled={loading}
-                    className="ml-auto rounded-lg bg-stone-900 px-5 py-2 text-sm font-medium text-white transition hover:bg-stone-800 disabled:opacity-50"
-                >
+                <button onClick={onExit} className="rounded-lg border border-stone-200 bg-white px-4 py-2 text-sm text-stone-700 transition hover:border-stone-300">Exit session</button>
+                <button onClick={onNext} disabled={loading} className="ml-auto rounded-lg bg-stone-900 px-5 py-2 text-sm font-medium text-white transition hover:bg-stone-800 disabled:opacity-50">
                     {loading ? 'Loading…' : 'Next question'}
                 </button>
             </div>
@@ -1356,67 +941,304 @@ function FeedbackScreen({
 }
 
 // ============================================================
-// Profile — password change now sends reset email
+// InterviewPicker + InterviewScreen (Phase 2)
 // ============================================================
 
-type Modal =
-    | null
-    | 'email'
-    | 'password'
-    | 'display_name'
-    | 'notifications'
-    | 'difficulty';
+function InterviewPicker({ onCancel, onPick }: { onCancel: () => void; onPick: (focus: string) => void; }) {
+    const [customFocus, setCustomFocus] = useState('');
+    const presets = [
+        { label: 'Frontend', value: 'Frontend developer interview', description: 'React, CSS, accessibility, browser internals' },
+        { label: 'Backend', value: 'Backend developer interview', description: 'APIs, databases, auth, caching' },
+        { label: 'System design', value: 'System design interview', description: 'Architecture, scaling, tradeoffs' },
+        { label: 'Coding fundamentals', value: 'Coding fundamentals interview', description: 'Data structures, algorithms, complexity' },
+    ];
 
-function ProfileScreen({
-    profile,
-    email,
-    stats,
-    attemptsCount,
-    onProfileChange,
-}: {
-    profile: Profile;
-    email: string;
-    stats: Stats;
-    attemptsCount: number;
-    onProfileChange: () => void;
-}) {
-    const [modal, setModal] = useState<Modal>(null);
-    const [busy, setBusy] = useState(false);
-    const [msg, setMsg] = useState<string | null>(null);
+    return (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-stone-900/40 p-4" onClick={onCancel}>
+            <div className="w-full max-w-md rounded-2xl border border-stone-200 bg-white p-6" onClick={(e) => e.stopPropagation()}>
+                <div className="mb-4 flex items-center justify-between">
+                    <div>
+                        <h3 className="text-base font-semibold">Start a mock interview</h3>
+                        <p className="text-xs text-stone-500">Pick a focus — you can answer by typing.</p>
+                    </div>
+                    <button onClick={onCancel} className="text-stone-500 hover:text-stone-800">✕</button>
+                </div>
 
-    const initial =
-        profile.display_name?.[0]?.toUpperCase() ||
-        email[0]?.toUpperCase() ||
-        '?';
+                <div className="space-y-2">
+                    {presets.map((p) => (
+                        <button key={p.value} onClick={() => onPick(p.value)} className="group flex w-full items-center justify-between rounded-xl border border-stone-100 bg-stone-50 px-4 py-3 text-left transition hover:border-stone-300 hover:bg-white">
+                            <div>
+                                <div className="text-sm font-medium text-stone-900">{p.label}</div>
+                                <div className="text-xs text-stone-500">{p.description}</div>
+                            </div>
+                            <span className="text-xs text-stone-400 group-hover:text-stone-700">Start →</span>
+                        </button>
+                    ))}
+                </div>
 
-    async function signOut() {
-        await supabase.auth.signOut();
+                <div className="mt-4 border-t border-stone-100 pt-4">
+                    <label className="text-xs font-medium text-stone-600">Or custom focus</label>
+                    <form
+                        onSubmit={(e) => {
+                            e.preventDefault();
+                            const q = customFocus.trim();
+                            if (q) onPick(`${q} interview`);
+                        }}
+                        className="mt-2 flex gap-2"
+                    >
+                        <input value={customFocus} onChange={(e) => setCustomFocus(e.target.value)} placeholder="e.g. DevOps, Data engineering, iOS" className="flex-1 rounded-lg border border-stone-200 bg-white px-3 py-2 text-sm placeholder-stone-400 focus:border-stone-400 focus:outline-none" />
+                        <button type="submit" disabled={!customFocus.trim()} className="rounded-lg bg-stone-900 px-4 py-2 text-sm font-medium text-white transition hover:bg-stone-800 disabled:opacity-50">
+                            Start
+                        </button>
+                    </form>
+                </div>
+            </div>
+        </div>
+    );
+}
+
+function InterviewScreen({ focus, transcript, loading, onSend, onEnd }: { focus: string; transcript: InterviewTurn[]; loading: boolean; onSend: (message: string) => void; onEnd: () => void; }) {
+    const [draft, setDraft] = useState('');
+    const [voiceOn, setVoiceOn] = useState(true);
+    const [listening, setListening] = useState(false);
+    const [interimText, setInterimText] = useState('');
+    const scrollRef = useRef<HTMLDivElement | null>(null);
+    const recognitionRef = useRef<any>(null);
+    const spokenIndexRef = useRef<number>(-1);
+
+    // Browser support flags
+    const SR: any =
+        typeof window !== 'undefined'
+            ? (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition
+            : null;
+    const speechAvailable = typeof window !== 'undefined' && 'speechSynthesis' in window;
+    const micAvailable = !!SR;
+
+    // Speak new interviewer messages
+    useEffect(() => {
+        if (!voiceOn || !speechAvailable) return;
+        for (let i = spokenIndexRef.current + 1; i < transcript.length; i++) {
+            const turn = transcript[i];
+            if (turn.role === 'interviewer') {
+                const u = new SpeechSynthesisUtterance(turn.content);
+                u.rate = 1.0;
+                u.pitch = 1.0;
+                // Try to pick a natural English voice
+                const voices = window.speechSynthesis.getVoices();
+                const preferred =
+                    voices.find((v) => /en-US/i.test(v.lang) && /Google|Samantha|Natural/i.test(v.name)) ||
+                    voices.find((v) => /en-US/i.test(v.lang)) ||
+                    voices[0];
+                if (preferred) u.voice = preferred;
+                window.speechSynthesis.speak(u);
+            }
+            spokenIndexRef.current = i;
+        }
+    }, [transcript, voiceOn, speechAvailable]);
+
+    // Stop all speech + mic on unmount
+    useEffect(() => {
+        return () => {
+            if (speechAvailable) window.speechSynthesis.cancel();
+            if (recognitionRef.current) {
+                try { recognitionRef.current.stop(); } catch { /* ignore */ }
+            }
+        };
+    }, [speechAvailable]);
+
+    // Auto-scroll to bottom
+    useEffect(() => {
+        scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: 'smooth' });
+    }, [transcript, loading, interimText]);
+
+    function toggleVoice() {
+        const next = !voiceOn;
+        setVoiceOn(next);
+        if (!next && speechAvailable) window.speechSynthesis.cancel();
+    }
+
+    function startListening() {
+        if (!micAvailable || loading) return;
+        // Cancel any interviewer speech so we hear the user cleanly
+        if (speechAvailable) window.speechSynthesis.cancel();
+
+        const rec = new SR();
+        rec.lang = 'en-US';
+        rec.continuous = true;
+        rec.interimResults = true;
+
+        let finalText = '';
+
+        rec.onresult = (event: any) => {
+            let interim = '';
+            for (let i = event.resultIndex; i < event.results.length; i++) {
+                const chunk = event.results[i][0].transcript;
+                if (event.results[i].isFinal) finalText += chunk + ' ';
+                else interim += chunk;
+            }
+            setInterimText((finalText + interim).trim());
+        };
+        rec.onerror = () => { setListening(false); };
+        rec.onend = () => {
+            setListening(false);
+            const combined = (finalText + ' ' + interimText).trim();
+            const toSend = combined || interimText.trim();
+            setInterimText('');
+            if (toSend) onSend(toSend);
+        };
+
+        recognitionRef.current = rec;
+        setInterimText('');
+        setListening(true);
+        rec.start();
+    }
+
+    function stopListening() {
+        if (recognitionRef.current) {
+            try { recognitionRef.current.stop(); } catch { /* ignore */ }
+        }
+    }
+
+    function submitTyped(e: React.FormEvent) {
+        e.preventDefault();
+        if (loading || listening) return;
+        const t = draft.trim();
+        if (!t) return;
+        setDraft('');
+        onSend(t);
+    }
+
+    function handleEnd() {
+        if (speechAvailable) window.speechSynthesis.cancel();
+        stopListening();
+        onEnd();
     }
 
     return (
-        <div className="space-y-6">
-            {msg && (
-                <div className="rounded-xl border border-emerald-200 bg-emerald-50 p-3 text-sm text-emerald-800">
-                    {msg}
+        <div className="flex h-[calc(100vh-8rem)] flex-col space-y-4">
+            <div className="flex items-center justify-between">
+                <div>
+                    <div className="text-xs uppercase tracking-wide text-stone-500">Mock interview</div>
+                    <div className="text-sm font-medium text-stone-900">{focus}</div>
                 </div>
-            )}
+                <div className="flex items-center gap-2">
+                    {speechAvailable && (
+                        <button
+                            onClick={toggleVoice}
+                            className="rounded-lg border border-stone-200 bg-white px-3 py-1.5 text-xs font-medium text-stone-700 transition hover:border-stone-300"
+                            title={voiceOn ? 'Mute interviewer voice' : 'Unmute interviewer voice'}
+                        >
+                            {voiceOn ? '🔊 Voice on' : '🔇 Voice off'}
+                        </button>
+                    )}
+                    <button
+                        onClick={handleEnd}
+                        className="rounded-lg border border-stone-200 bg-white px-3 py-1.5 text-xs font-medium text-stone-700 transition hover:border-stone-300"
+                    >
+                        End interview
+                    </button>
+                </div>
+            </div>
 
+            <div ref={scrollRef} className="flex-1 space-y-3 overflow-y-auto rounded-2xl border border-stone-200 bg-white p-4">
+                {transcript.map((turn, i) => (
+                    <div key={i} className={`flex ${turn.role === 'candidate' ? 'justify-end' : 'justify-start'}`}>
+                        <div className={`max-w-[80%] rounded-2xl px-4 py-2 text-sm leading-relaxed ${turn.role === 'candidate' ? 'bg-stone-900 text-white' : 'border border-stone-200 bg-stone-50 text-stone-900'}`}>
+                            {turn.content}
+                        </div>
+                    </div>
+                ))}
+                {listening && interimText && (
+                    <div className="flex justify-end">
+                        <div className="max-w-[80%] rounded-2xl border border-dashed border-stone-400 bg-stone-100 px-4 py-2 text-sm italic text-stone-600">
+                            {interimText}…
+                        </div>
+                    </div>
+                )}
+                {loading && (
+                    <div className="flex justify-start">
+                        <div className="rounded-2xl border border-stone-200 bg-stone-50 px-4 py-2 text-sm text-stone-500">
+                            <span className="inline-flex gap-1">
+                                <span className="h-2 w-2 animate-bounce rounded-full bg-stone-400 [animation-delay:-0.3s]" />
+                                <span className="h-2 w-2 animate-bounce rounded-full bg-stone-400 [animation-delay:-0.15s]" />
+                                <span className="h-2 w-2 animate-bounce rounded-full bg-stone-400" />
+                            </span>
+                        </div>
+                    </div>
+                )}
+            </div>
+
+            <div className="space-y-2">
+                {micAvailable ? (
+                    <button
+                        onClick={listening ? stopListening : startListening}
+                        disabled={loading}
+                        className={`flex w-full items-center justify-center gap-3 rounded-2xl px-4 py-4 text-sm font-medium transition disabled:opacity-50 ${listening
+                                ? 'bg-red-600 text-white hover:bg-red-700'
+                                : 'bg-stone-900 text-white hover:bg-stone-800'
+                            }`}
+                    >
+                        {listening ? (
+                            <>
+                                <span className="relative flex h-3 w-3">
+                                    <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-white opacity-75" />
+                                    <span className="relative inline-flex h-3 w-3 rounded-full bg-white" />
+                                </span>
+                                Listening… tap to send
+                            </>
+                        ) : (
+                            <>🎤 Tap to speak your answer</>
+                        )}
+                    </button>
+                ) : (
+                    <div className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-xs text-amber-800">
+                        Voice input isn't supported in this browser. Chrome or Edge work best. You can still type below.
+                    </div>
+                )}
+
+                <form onSubmit={submitTyped} className="flex gap-2">
+                    <input
+                        value={draft}
+                        onChange={(e) => setDraft(e.target.value)}
+                        placeholder={loading ? 'Interviewer is thinking…' : listening ? 'Listening via mic…' : 'Or type your answer…'}
+                        disabled={loading || listening}
+                        className="flex-1 rounded-lg border border-stone-200 bg-white px-3 py-2 text-sm placeholder-stone-400 focus:border-stone-400 focus:outline-none disabled:opacity-50"
+                    />
+                    <button type="submit" disabled={loading || listening || !draft.trim()} className="rounded-lg bg-stone-900 px-5 py-2 text-sm font-medium text-white transition hover:bg-stone-800 disabled:opacity-50">
+                        Send
+                    </button>
+                </form>
+            </div>
+        </div>
+    );
+}
+
+// ============================================================
+// Profile screens
+// ============================================================
+
+type Modal = null | 'email' | 'password' | 'display_name' | 'notifications' | 'difficulty';
+
+function ProfileScreen({ profile, email, stats, attemptsCount, onProfileChange }: { profile: Profile; email: string; stats: Stats; attemptsCount: number; onProfileChange: () => void; }) {
+    const [modal, setModal] = useState<Modal>(null);
+    const [busy, setBusy] = useState(false);
+    const [msg, setMsg] = useState<string | null>(null);
+    const initial = profile.display_name?.[0]?.toUpperCase() || email[0]?.toUpperCase() || '?';
+
+    async function signOut() { await supabase.auth.signOut(); }
+
+    return (
+        <div className="space-y-6">
+            {msg && <div className="rounded-xl border border-emerald-200 bg-emerald-50 p-3 text-sm text-emerald-800">{msg}</div>}
             <section className="rounded-2xl border border-stone-200 bg-white p-6">
                 <div className="flex items-center gap-4">
-                    <div className="flex h-16 w-16 items-center justify-center rounded-full bg-stone-200 text-lg font-semibold text-stone-700">
-                        {initial}
-                    </div>
+                    <div className="flex h-16 w-16 items-center justify-center rounded-full bg-stone-200 text-lg font-semibold text-stone-700">{initial}</div>
                     <div className="min-w-0">
-                        <div className="truncate text-lg font-semibold tracking-tight">
-                            {profile.display_name || email.split('@')[0]}
-                        </div>
+                        <div className="truncate text-lg font-semibold tracking-tight">{profile.display_name || email.split('@')[0]}</div>
                         <div className="truncate text-sm text-stone-500">{email}</div>
-                        <div className="mt-0.5 text-xs text-stone-500">
-                            Level {stats.level} · {attemptsCount} attempts total
-                        </div>
+                        <div className="mt-0.5 text-xs text-stone-500">Level {stats.level} · {attemptsCount} attempts total</div>
                     </div>
                 </div>
-
                 <div className="mt-6 grid grid-cols-3 gap-3">
                     <Stat label="Streak" value={`${stats.streak} d`} />
                     <Stat label="Solved" value={stats.solved.toString()} />
@@ -1425,36 +1247,15 @@ function ProfileScreen({
             </section>
 
             <section className="rounded-2xl border border-stone-200 bg-white p-6">
-                <h2 className="mb-3 text-sm font-semibold uppercase tracking-wide text-stone-500">
-                    Account
-                </h2>
-                <SettingRow
-                    label="Display name"
-                    value={profile.display_name || '—'}
-                    onClick={() => setModal('display_name')}
-                />
+                <h2 className="mb-3 text-sm font-semibold uppercase tracking-wide text-stone-500">Account</h2>
+                <SettingRow label="Display name" value={profile.display_name || '—'} onClick={() => setModal('display_name')} />
                 <SettingRow label="Email" value={email} onClick={() => setModal('email')} />
-                <SettingRow
-                    label="Change password"
-                    value=""
-                    onClick={() => setModal('password')}
-                />
-                <SettingRow
-                    label="Notification preferences"
-                    value={profile.email_notifications ? 'On' : 'Off'}
-                    onClick={() => setModal('notifications')}
-                />
-                <SettingRow
-                    label="Preferred difficulty"
-                    value={profile.preferred_difficulty}
-                    onClick={() => setModal('difficulty')}
-                />
+                <SettingRow label="Change password" value="" onClick={() => setModal('password')} />
+                <SettingRow label="Notification preferences" value={profile.email_notifications ? 'On' : 'Off'} onClick={() => setModal('notifications')} />
+                <SettingRow label="Preferred difficulty" value={profile.preferred_difficulty} onClick={() => setModal('difficulty')} />
             </section>
 
-            <button
-                onClick={signOut}
-                className="w-full rounded-2xl border border-stone-200 bg-white py-3 text-sm font-medium text-stone-700 transition hover:border-stone-300"
-            >
+            <button onClick={signOut} className="w-full rounded-2xl border border-stone-200 bg-white py-3 text-sm font-medium text-stone-700 transition hover:border-stone-300">
                 Sign out
             </button>
 
@@ -1478,20 +1279,9 @@ function ProfileScreen({
     );
 }
 
-function SettingRow({
-    label,
-    value,
-    onClick,
-}: {
-    label: string;
-    value: string;
-    onClick: () => void;
-}) {
+function SettingRow({ label, value, onClick }: { label: string; value: string; onClick: () => void; }) {
     return (
-        <button
-            onClick={onClick}
-            className="flex w-full items-center justify-between border-b border-stone-100 py-3 text-left text-sm last:border-b-0"
-        >
+        <button onClick={onClick} className="flex w-full items-center justify-between border-b border-stone-100 py-3 text-left text-sm last:border-b-0">
             <span className="text-stone-800">{label}</span>
             <span className="flex items-center gap-2 text-stone-500">
                 <span className="max-w-[180px] truncate text-xs">{value}</span>
@@ -1501,23 +1291,7 @@ function SettingRow({
     );
 }
 
-function SettingModal({
-    modal,
-    profile,
-    email,
-    busy,
-    setBusy,
-    onClose,
-    onDone,
-}: {
-    modal: Exclude<Modal, null>;
-    profile: Profile;
-    email: string;
-    busy: boolean;
-    setBusy: (b: boolean) => void;
-    onClose: () => void;
-    onDone: (msg: string) => void;
-}) {
+function SettingModal({ modal, profile, email, busy, setBusy, onClose, onDone }: { modal: Exclude<Modal, null>; profile: Profile; email: string; busy: boolean; setBusy: (b: boolean) => void; onClose: () => void; onDone: (msg: string) => void; }) {
     const [displayName, setDisplayName] = useState(profile.display_name || '');
     const [newEmail, setNewEmail] = useState(email);
     const [notifOn, setNotifOn] = useState(profile.email_notifications);
@@ -1529,10 +1303,7 @@ function SettingModal({
         setBusy(true);
         try {
             if (modal === 'display_name') {
-                const { error } = await supabase
-                    .from('profiles')
-                    .update({ display_name: displayName || null })
-                    .eq('user_id', profile.user_id);
+                const { error } = await supabase.from('profiles').update({ display_name: displayName || null }).eq('user_id', profile.user_id);
                 if (error) throw error;
                 onDone('Display name updated');
             } else if (modal === 'email') {
@@ -1540,25 +1311,15 @@ function SettingModal({
                 if (error) throw error;
                 onDone('Check both inboxes to confirm the change');
             } else if (modal === 'password') {
-                const { error } = await supabase.auth.resetPasswordForEmail(email, {
-                    redirectTo: window.location.origin,
-                });
+                const { error } = await supabase.auth.resetPasswordForEmail(email, { redirectTo: window.location.origin });
                 if (error) throw error;
-                onDone(
-                    `Password reset link sent to ${email}. Check your inbox and click the link to set a new password.`
-                );
+                onDone(`Password reset link sent to ${email}. Check your inbox and click the link to set a new password.`);
             } else if (modal === 'notifications') {
-                const { error } = await supabase
-                    .from('profiles')
-                    .update({ email_notifications: notifOn })
-                    .eq('user_id', profile.user_id);
+                const { error } = await supabase.from('profiles').update({ email_notifications: notifOn }).eq('user_id', profile.user_id);
                 if (error) throw error;
                 onDone('Notification preferences saved');
             } else if (modal === 'difficulty') {
-                const { error } = await supabase
-                    .from('profiles')
-                    .update({ preferred_difficulty: diff })
-                    .eq('user_id', profile.user_id);
+                const { error } = await supabase.from('profiles').update({ preferred_difficulty: diff }).eq('user_id', profile.user_id);
                 if (error) throw error;
                 onDone('Preferred difficulty saved');
             }
@@ -1576,7 +1337,6 @@ function SettingModal({
         notifications: 'Email notifications',
         difficulty: 'Preferred difficulty',
     };
-
     const ctaLabel = modal === 'password' ? 'Send reset link' : 'Save';
 
     return (
@@ -1584,79 +1344,38 @@ function SettingModal({
             <div className="w-full max-w-sm rounded-2xl border border-stone-200 bg-white p-6">
                 <div className="mb-4 flex items-center justify-between">
                     <h3 className="text-base font-semibold">{titles[modal]}</h3>
-                    <button
-                        onClick={onClose}
-                        className="text-stone-500 hover:text-stone-800"
-                    >
-                        ✕
-                    </button>
+                    <button onClick={onClose} className="text-stone-500 hover:text-stone-800">✕</button>
                 </div>
-
-                {error && (
-                    <div className="mb-3 rounded-lg border border-red-200 bg-red-50 p-3 text-xs text-red-800">
-                        {error}
-                    </div>
-                )}
-
-                {modal === 'display_name' && (
-                    <Field label="Display name" value={displayName} onChange={setDisplayName} />
-                )}
-                {modal === 'email' && (
-                    <Field label="New email" type="email" value={newEmail} onChange={setNewEmail} />
-                )}
+                {error && <div className="mb-3 rounded-lg border border-red-200 bg-red-50 p-3 text-xs text-red-800">{error}</div>}
+                {modal === 'display_name' && <Field label="Display name" value={displayName} onChange={setDisplayName} />}
+                {modal === 'email' && <Field label="New email" type="email" value={newEmail} onChange={setNewEmail} />}
                 {modal === 'password' && (
                     <p className="text-sm leading-relaxed text-stone-700">
-                        We'll email a secure password reset link to <b>{email}</b>. Click it to set a
-                        new password.
+                        We'll email a secure password reset link to <b>{email}</b>. Click it to set a new password.
                     </p>
                 )}
                 {modal === 'notifications' && (
                     <label className="flex items-center gap-3 text-sm">
-                        <input
-                            type="checkbox"
-                            checked={notifOn}
-                            onChange={(e) => setNotifOn(e.target.checked)}
-                            className="h-4 w-4"
-                        />
+                        <input type="checkbox" checked={notifOn} onChange={(e) => setNotifOn(e.target.checked)} className="h-4 w-4" />
                         Receive practice reminders by email
                     </label>
                 )}
                 {modal === 'difficulty' && (
                     <div className="flex gap-2">
                         {(['easy', 'medium', 'hard'] as Difficulty[]).map((d) => (
-                            <button
-                                key={d}
-                                onClick={() => setDiff(d)}
-                                className={`flex-1 rounded-lg px-3 py-2 text-sm font-medium capitalize transition ${diff === d
-                                    ? 'bg-stone-900 text-white'
-                                    : 'border border-stone-200 bg-white text-stone-600'
-                                    }`}
-                            >
+                            <button key={d} onClick={() => setDiff(d)} className={`flex-1 rounded-lg px-3 py-2 text-sm font-medium capitalize transition ${diff === d ? 'bg-stone-900 text-white' : 'border border-stone-200 bg-white text-stone-600'}`}>
                                 {d}
                             </button>
                         ))}
                     </div>
                 )}
-
                 <div className="mt-6 flex gap-2">
-                    <button
-                        onClick={onClose}
-                        className="flex-1 rounded-lg border border-stone-200 bg-white px-4 py-2 text-sm text-stone-700 hover:border-stone-300"
-                    >
-                        Cancel
-                    </button>
-                    <button
-                        onClick={save}
-                        disabled={busy}
-                        className="flex-1 rounded-lg bg-stone-900 px-4 py-2 text-sm font-medium text-white hover:bg-stone-800 disabled:opacity-50"
-                    >
+                    <button onClick={onClose} className="flex-1 rounded-lg border border-stone-200 bg-white px-4 py-2 text-sm text-stone-700 hover:border-stone-300">Cancel</button>
+                    <button onClick={save} disabled={busy} className="flex-1 rounded-lg bg-stone-900 px-4 py-2 text-sm font-medium text-white hover:bg-stone-800 disabled:opacity-50">
                         {busy ? 'Working…' : ctaLabel}
                     </button>
-
                 </div>
-
             </div>
-
         </div>
     );
 }
