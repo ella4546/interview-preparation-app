@@ -117,4 +117,99 @@ Ask the next question. If the candidate's last answer was weak, drill deeper int
 If it was strong, move to a related but different concept.
 Return ONLY the next question, no preamble.
 """
+
+
+# ============================================================
+# Mock Interview functions
+# ============================================================
+
+def interview_opener(focus: str, display_name: str | None = None) -> str:
+    """First message of the interview — greeting + first question."""
+    name_part = f", {display_name}" if display_name else ""
+    prompt = f"""You are a friendly but professional senior software engineer conducting a technical mock interview.
+
+The candidate wants to practice for a: {focus}
+
+Write your OPENING message to the candidate. It must:
+1. Greet them warmly by name (Hi{name_part})
+2. Briefly state what the interview will cover (1 sentence)
+3. Ask your FIRST question — a solid opener that's not too hard, not too easy
+
+Keep it conversational, like you would actually speak. 3-5 short sentences total.
+Return ONLY the message text — no quotes, no preamble, no formatting.
+"""
+    return _chat(prompt)
+
+
+def interview_next_turn(focus: str, transcript: list[dict[str, str]]) -> str:
+    """Given the conversation so far, generate the interviewer's next message."""
+    formatted = "\n\n".join(
+        f"{'INTERVIEWER' if t['role'] == 'interviewer' else 'CANDIDATE'}: {t['content']}"
+        for t in transcript
+    )
+    prompt = f"""You are a friendly but professional senior software engineer conducting a technical mock interview.
+
+Focus area: {focus}
+
+CONVERSATION SO FAR:
+{formatted}
+
+Generate your NEXT message as the interviewer. Rules:
+- React specifically to what the candidate just said (acknowledge good points briefly, note if something was unclear).
+- If their last answer was weak or missed key concepts, ask a follow-up that probes deeper on that specific weakness.
+- If their last answer was strong, move to a related but different concept.
+- Do NOT reveal correct answers or grade them numerically. This is a natural conversation, not feedback yet.
+- Keep it to 2-4 sentences, like a real person speaking.
+- Do NOT number your questions.
+
+Return ONLY your next message, no formatting or preamble.
+"""
+    return _chat(prompt)
+
+
+def interview_evaluate(focus: str, transcript: list[dict[str, str]]) -> dict:
+    """After the interview ends, produce a structured evaluation."""
+    formatted = "\n\n".join(
+        f"{'INTERVIEWER' if t['role'] == 'interviewer' else 'CANDIDATE'}: {t['content']}"
+        for t in transcript
+    )
+    prompt = f"""You are a senior engineering hiring manager who just finished conducting a technical mock interview.
+
+Focus area: {focus}
+
+FULL TRANSCRIPT:
+{formatted}
+
+Produce a structured evaluation as JSON with EXACTLY this schema:
+{{
+  "overall_score": <integer 0-10>,
+  "hire_recommendation": "<'strong hire' | 'hire' | 'lean no hire' | 'no hire'>",
+  "technical_depth": <integer 0-10>,
+  "communication": <integer 0-10>,
+  "problem_solving": <integer 0-10>,
+  "summary": "<2-3 sentence overall assessment>",
+  "strengths": [<up to 3 specific strength bullets, each 1 sentence>],
+  "weaknesses": [<up to 3 specific weakness bullets, each 1 sentence>],
+  "study_recommendations": [<up to 3 specific topics to study next, each 1 short phrase>]
+}}
+
+Be honest and specific. Reference what the candidate actually said. Return ONLY the JSON object, no fences, no explanation.
+"""
+    text = _chat(prompt, json_mode=True)
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError:
+        logger.exception(
+            "Interview evaluation returned malformed JSON: %s", text)
+        return {
+            "overall_score": 0,
+            "hire_recommendation": "no hire",
+            "technical_depth": 0,
+            "communication": 0,
+            "problem_solving": 0,
+            "summary": "We couldn't fully evaluate this interview due to a system error. Please try again.",
+            "strengths": [],
+            "weaknesses": [],
+            "study_recommendations": [],
+        }
     return _chat(prompt)
