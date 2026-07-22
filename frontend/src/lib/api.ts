@@ -14,7 +14,7 @@ export interface Question {
 export interface GradeResult {
     score: number;
     correct: boolean;
-    verdict: string;
+    verdict: 'correct' | 'partial' | 'incorrect';
     feedback: string;
     missed_concepts: string[];
     strong_concepts: string[];

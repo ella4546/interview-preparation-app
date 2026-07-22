@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
     Attempt,
     computeStats,
@@ -15,8 +15,12 @@ import {
     Topic,
     Video,
 } from './lib/api';
+import { createPortal } from "react-dom";
 
-// Default topics shown when there's no popularity data yet
+// ============================================================
+// Constants + helpers
+// ============================================================
+
 const DEFAULT_TOPICS: { slug: string; label: string }[] = [
     { slug: 'data_structures', label: 'Data structures' },
     { slug: 'system_design', label: 'System design' },
@@ -73,16 +77,64 @@ function loadRecentTopics(): string[] {
     }
 }
 
+function saveRecentTopics(list: string[]) {
+    if (typeof window === 'undefined') return;
+    try {
+        window.localStorage.setItem(RECENT_TOPICS_KEY, JSON.stringify(list.slice(0, 8)));
+    } catch { /* ignore */ }
+}
+
 function normalizeTopic(input: string): string {
     return input.trim().toLowerCase().replace(/\s+/g, ' ');
 }
 
 // ============================================================
-// Screen + Interview types
+// Types
 // ============================================================
 
-type Screen = 'dashboard' | 'question' | 'feedback' | 'profile' | 'interview';
+type Screen =
+    | 'dashboard'
+    | 'question'
+    | 'feedback'
+    | 'profile'
+    | 'interview'
+    | 'interview-eval'
+    | 'session-summary';
+
+type SessionResult = {
+    question_text: string;
+    topic: string;
+    score: number;
+    verdict: 'correct' | 'partial' | 'incorrect';
+    hints_used: number;
+    missed_concepts: string[];
+    strong_concepts: string[];
+};
+
 type InterviewTurn = { role: 'interviewer' | 'candidate'; content: string };
+
+type InterviewEvaluation = {
+    overall_score?: number;
+    verdict?: string;
+    summary?: string;
+    strengths?: string[];
+    weaknesses?: string[];
+    recommendations?: string[];
+    topic_scores?: Record<string, number>;
+    [key: string]: any;
+};
+
+type InterviewSessionRow = {
+    id: string;
+    focus: string;
+    transcript: InterviewTurn[];
+    evaluation: InterviewEvaluation | null;
+    status: string;
+    turns_completed: number;
+    created_at: string;
+};
+
+type Modal = null | 'email' | 'password' | 'display_name' | 'notifications' | 'difficulty';
 
 // ============================================================
 // Root
@@ -121,7 +173,7 @@ export default function App() {
 }
 
 // ============================================================
-// Sign in / Sign up (unchanged from your version)
+// Auth screens
 // ============================================================
 
 function AuthScreens() {
@@ -297,18 +349,23 @@ function AuthedApp({ session }: { session: Session }) {
     const [videos, setVideos] = useState<Video[]>([]);
     const [loading, setLoading] = useState(false);
     const [error, setError] = useState<string | null>(null);
+    const [sessionResults, setSessionResults] = useState<SessionResult[]>([]);
 
-    // Interview state
     const [interviewFocus, setInterviewFocus] = useState<string>('');
     const [interviewTranscript, setInterviewTranscript] = useState<InterviewTurn[]>([]);
     const [interviewLoading, setInterviewLoading] = useState(false);
     const [showInterviewPicker, setShowInterviewPicker] = useState(false);
+    const [interviewEvaluation, setInterviewEvaluation] = useState<InterviewEvaluation | null>(null);
+    const [evaluatingInterview, setEvaluatingInterview] = useState(false);
+    const [pastInterviews, setPastInterviews] = useState<InterviewSessionRow[]>([]);
+    const [viewingSession, setViewingSession] = useState<InterviewSessionRow | null>(null);
 
     const loadAll = useCallback(async () => {
-        const [{ data: p }, { data: a }, { data: pop }] = await Promise.all([
+        const [{ data: p }, { data: a }, { data: pop }, { data: sessions }] = await Promise.all([
             supabase.from('profiles').select('*').eq('user_id', user.id).single(),
             supabase.from('attempts').select('*').eq('user_id', user.id).order('created_at', { ascending: false }).limit(500),
             supabase.rpc('get_popular_topics', { limit_count: 6 }),
+            supabase.from('interview_sessions').select('*').eq('user_id', user.id).order('created_at', { ascending: false }).limit(20),
         ]);
         if (p) {
             setProfile(p as Profile);
@@ -321,6 +378,7 @@ function AuthedApp({ session }: { session: Session }) {
         if (pop && Array.isArray(pop)) {
             setPopularTopics(pop.map((row: any) => ({ slug: row.topic as string, attempts: Number(row.attempts) || 0 })));
         }
+        if (sessions) setPastInterviews(sessions as InterviewSessionRow[]);
     }, [user.id]);
 
     useEffect(() => { loadAll(); }, [loadAll]);
@@ -337,11 +395,15 @@ function AuthedApp({ session }: { session: Session }) {
         setFeedback(null);
         setSessionTopic(clean);
         setQuestionIndex(1);
+        setSessionResults([]);
         try {
             const q = await api.generateQuestion(clean, difficulty, []);
             setRecentQuestions([q.question_text]);
             setQuestion(q);
             setScreen('question');
+            const recent = loadRecentTopics();
+            const next = [clean, ...recent.filter((t) => t !== clean)];
+            saveRecentTopics(next);
         } catch (e) {
             setError(e instanceof Error ? e.message : 'Something went wrong');
         } finally {
@@ -378,6 +440,15 @@ function AuthedApp({ session }: { session: Session }) {
             const result = await api.gradeAnswer(question.id, question.question_text, answer, hintsUsed);
             setFeedback(result);
             setScreen('feedback');
+            setSessionResults((prev) => [...prev, {
+                question_text: question.question_text,
+                topic: question.topic,
+                score: result.score,
+                verdict: result.verdict,
+                hints_used: hintsUsed,
+                missed_concepts: result.missed_concepts ?? [],
+                strong_concepts: result.strong_concepts ?? [],
+            }]);
             await supabase.from('attempts').insert({
                 user_id: user.id,
                 topic: normalizeTopic(question.topic),
@@ -431,9 +502,13 @@ function AuthedApp({ session }: { session: Session }) {
         setHintsUsed(0);
         setError(null);
         setQuestionIndex(1);
+        setSessionResults([]);
     }
 
-    // Interview flow
+    function finishSession() {
+        setScreen('session-summary');
+    }
+
     const displayName = profile?.display_name || user.email?.split('@')[0] || 'there';
 
     async function beginInterview(focus: string) {
@@ -470,18 +545,40 @@ function AuthedApp({ session }: { session: Session }) {
     }
 
     async function endInterview() {
+        if (interviewTranscript.length < 2) {
+            setError('Answer at least one question before ending the interview.');
+            return;
+        }
+        setEvaluatingInterview(true);
+        setInterviewEvaluation(null);
+        setScreen('interview-eval');
+        let evaluation: InterviewEvaluation | null = null;
+        try {
+            evaluation = await api.evaluateInterview(interviewFocus, interviewTranscript);
+            setInterviewEvaluation(evaluation);
+        } catch (e) {
+            setError(e instanceof Error ? e.message : 'Failed to evaluate interview');
+        } finally {
+            setEvaluatingInterview(false);
+        }
         try {
             await supabase.from('interview_sessions').insert({
                 user_id: user.id,
                 focus: interviewFocus,
                 transcript: interviewTranscript,
+                evaluation,
                 status: 'completed',
                 turns_completed: Math.floor(interviewTranscript.length / 2),
             });
+            loadAll();
         } catch { /* non-blocking */ }
+    }
+
+    function returnFromEvaluation() {
         setScreen('dashboard');
         setInterviewTranscript([]);
         setInterviewFocus('');
+        setInterviewEvaluation(null);
     }
 
     return (
@@ -507,6 +604,8 @@ function AuthedApp({ session }: { session: Session }) {
                         }}
                         onStart={startSession}
                         onStartInterview={() => setShowInterviewPicker(true)}
+                        pastInterviews={pastInterviews}
+                        onOpenPastInterview={setViewingSession}
                         loading={loading}
                     />
                 )}
@@ -535,8 +634,17 @@ function AuthedApp({ session }: { session: Session }) {
                         questionIndex={questionIndex}
                         sessionLength={sessionLength}
                         onNext={nextQuestion}
+                        onFinish={finishSession}
                         onExit={goDashboard}
                         loading={loading}
+                    />
+                )}
+
+                {screen === 'session-summary' && (
+                    <SessionSummaryScreen
+                        topic={sessionTopic}
+                        results={sessionResults}
+                        onDone={goDashboard}
                     />
                 )}
 
@@ -547,6 +655,16 @@ function AuthedApp({ session }: { session: Session }) {
                         loading={interviewLoading}
                         onSend={sendInterviewMessage}
                         onEnd={endInterview}
+                    />
+                )}
+
+                {screen === 'interview-eval' && (
+                    <InterviewEvaluationScreen
+                        focus={interviewFocus}
+                        transcript={interviewTranscript}
+                        evaluation={interviewEvaluation}
+                        loading={evaluatingInterview}
+                        onDone={returnFromEvaluation}
                     />
                 )}
 
@@ -567,9 +685,18 @@ function AuthedApp({ session }: { session: Session }) {
                     onPick={beginInterview}
                 />
             )}
+
+            {viewingSession && (
+                <PastInterviewViewer
+                    session={viewingSession}
+                    onClose={() => setViewingSession(null)}
+                />
+            )}
         </div>
     );
-}// ============================================================
+}
+
+// ============================================================
 // Nav
 // ============================================================
 
@@ -602,15 +729,8 @@ function TopNav({ current, onNavigate }: { current: Screen; onNavigate: (s: Scre
 // ============================================================
 
 function Dashboard({
-    displayName,
-    stats,
-    difficulty,
-    popularTopics,
-    attempts,
-    onDifficulty,
-    onStart,
-    onStartInterview,
-    loading,
+    displayName, stats, difficulty, popularTopics, attempts,
+    onDifficulty, onStart, onStartInterview, pastInterviews, onOpenPastInterview, loading,
 }: {
     displayName: string;
     stats: Stats;
@@ -618,158 +738,195 @@ function Dashboard({
     popularTopics: { slug: string; attempts: number }[];
     attempts: Attempt[];
     onDifficulty: (d: Difficulty) => void;
-    onStart: (t: Topic) => void;
+    onStart: (topic: Topic) => void;
     onStartInterview: () => void;
+    pastInterviews: InterviewSessionRow[];
+    onOpenPastInterview: (s: InterviewSessionRow) => void;
     loading: boolean;
 }) {
-    const [search, setSearch] = useState('');
-    const [showCalendar, setShowCalendar] = useState(false);
-    const [recent, setRecent] = useState<string[]>(loadRecentTopics());
+    const [customTopic, setCustomTopic] = useState('');
+    const [showSuggestions, setShowSuggestions] = useState(false);
+    const [showStreak, setShowStreak] = useState(false);
+    const recent = useMemo(() => loadRecentTopics(), []);
 
-    const query = search.trim().toLowerCase();
+    const topicsToShow = useMemo(() => {
+        if (popularTopics.length >= 6) {
+            return popularTopics.slice(0, 6).map((t) => ({ slug: t.slug, label: labelFor(t.slug) }));
+        }
+        return DEFAULT_TOPICS;
+    }, [popularTopics]);
 
-    const basePopular = popularTopics.length > 0
-        ? popularTopics.map((p) => ({ slug: p.slug, attempts: p.attempts }))
-        : DEFAULT_TOPICS.map((t) => ({ slug: t.slug, attempts: 0 }));
+    const filteredSuggestions = useMemo(() => {
+        const q = customTopic.trim().toLowerCase();
+        if (!q) return TOPIC_SUGGESTIONS.slice(0, 8);
+        return TOPIC_SUGGESTIONS.filter((s) => s.toLowerCase().includes(q)).slice(0, 8);
+    }, [customTopic]);
 
-    const pool = Array.from(new Set([
-        ...TOPIC_SUGGESTIONS.map((s) => normalizeTopic(s)),
-        ...recent,
-        ...basePopular.map((p) => p.slug),
-    ]));
-
-    const filtered = query ? pool.filter((slug) => slug.includes(query)).slice(0, 12) : [];
-
-    function submitSearch(e: React.FormEvent) {
+    function submitCustom(e: React.FormEvent) {
         e.preventDefault();
-        const q = search.trim();
-        if (!q) return;
-        setRecent([q.toLowerCase(), ...recent.filter((r) => r !== q.toLowerCase())].slice(0, 5));
-        onStart(q);
-    }
-
-    function pickTopic(slug: string) {
-        setRecent([slug, ...recent.filter((r) => r !== slug)].slice(0, 5));
-        setSearch('');
-        onStart(slug);
+        const clean = normalizeTopic(customTopic);
+        if (!clean) return;
+        onStart(clean);
     }
 
     return (
         <div className="space-y-6">
+            <div className="flex items-start justify-between gap-4">
+                <div>
+                    <div className="text-xs uppercase tracking-wide text-stone-500">Welcome back</div>
+                    <h1 className="mt-1 text-2xl font-semibold tracking-tight">Hi, {displayName}</h1>
+                </div>
+                <button
+                    onClick={() => setShowStreak(true)}
+                    className="group flex shrink-0 items-center gap-2 rounded-full border border-orange-200 bg-orange-50 px-4 py-2 text-sm font-semibold text-orange-900 transition hover:border-orange-300 hover:bg-orange-100"
+                    title="View your streak calendar"
+                >
+                    <span className="text-lg leading-none">🔥</span>
+                    <span className="tabular-nums">{stats.streak}</span>
+                    <span className="text-xs font-medium text-orange-700">
+                        {stats.streak === 1 ? 'day' : 'days'}
+                    </span>
+                </button>
+            </div>
+
+            <div className="grid w-full grid-cols-2 gap-3">
+                <div className="rounded-2xl border border-stone-200 bg-white p-4">
+                    <div className="text-xs uppercase tracking-wide text-stone-500">Solved</div>
+                    <div className="mt-1 text-2xl font-semibold tracking-tight">{stats.solved}</div>
+                </div>
+                <div className="rounded-2xl border border-stone-200 bg-white p-4">
+                    <div className="text-xs uppercase tracking-wide text-stone-500">Accuracy</div>
+                    <div className="mt-1 text-2xl font-semibold tracking-tight">{stats.accuracy}%</div>
+                </div>
+            </div>
+
             <section className="rounded-2xl border border-stone-200 bg-white p-6">
-                <div className="mb-1 flex items-start justify-between gap-4">
-                    <div>
-                        <h1 className="text-2xl font-semibold tracking-tight">Welcome back, {displayName}</h1>
-                        <p className="mt-1 text-sm text-stone-500">Level {stats.level} · Practice track</p>
+                <div className="flex items-center justify-between">
+                    <h2 className="text-sm font-semibold uppercase tracking-wide text-stone-500">Practice a topic</h2>
+                    <div className="flex gap-1 rounded-lg border border-stone-200 bg-stone-50 p-0.5">
+                        {(['easy', 'medium', 'hard'] as Difficulty[]).map((d) => (
+                            <button
+                                key={d}
+                                onClick={() => onDifficulty(d)}
+                                className={`rounded-md px-2.5 py-1 text-xs font-medium capitalize transition ${difficulty === d ? 'bg-white text-stone-900 shadow-sm' : 'text-stone-500 hover:text-stone-800'}`}
+                            >
+                                {d}
+                            </button>
+                        ))}
                     </div>
-                    <button onClick={() => setShowCalendar(true)} className="rounded-full border border-stone-200 bg-stone-50 px-3 py-1 text-xs font-medium text-stone-700 transition hover:border-stone-300 hover:bg-white">
-                        🔥 {stats.streak} day streak
-                    </button>
                 </div>
-                <div className="mt-6 grid grid-cols-2 gap-3 sm:grid-cols-4">
-                    <Stat label="Solved" value={stats.solved.toString()} />
-                    <Stat label="Accuracy" value={`${stats.accuracy}%`} />
-                    <Stat label="Hints" value={stats.hints.toString()} />
-                    <Stat label="XP" value={`${stats.xp}/${stats.xpForNext}`} />
-                </div>
-            </section>
 
-            <section className="rounded-2xl border border-stone-200 bg-white p-6">
-                <h2 className="text-lg font-semibold tracking-tight">Start today's session</h2>
-                <p className="mt-1 text-sm text-stone-500">Search any topic or pick one below · typed answers · hints available</p>
-
-                <form onSubmit={submitSearch} className="mt-4 flex gap-2">
-                    <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="e.g. Web design, React hooks, Kubernetes…" className="flex-1 rounded-lg border border-stone-200 bg-white px-3 py-2 text-sm placeholder-stone-400 focus:border-stone-400 focus:outline-none" />
-                    <button type="submit" disabled={loading || !search.trim()} className="rounded-lg bg-stone-900 px-4 py-2 text-sm font-medium text-white transition hover:bg-stone-800 disabled:opacity-50">
-                        {loading ? 'Searching…' : 'Search'}
-                    </button>
-                </form>
-
-                <div className="mt-4 flex flex-wrap gap-2">
-                    {(['easy', 'medium', 'hard'] as Difficulty[]).map((d) => (
-                        <button key={d} onClick={() => onDifficulty(d)} className={`rounded-full px-3 py-1 text-xs font-medium capitalize transition ${difficulty === d ? 'bg-stone-900 text-white' : 'border border-stone-200 bg-white text-stone-600 hover:border-stone-300'}`}>
-                            {d}
+                <div className="mt-4 grid grid-cols-2 gap-2 sm:grid-cols-3">
+                    {topicsToShow.map((t) => (
+                        <button
+                            key={t.slug}
+                            onClick={() => onStart(t.slug)}
+                            disabled={loading}
+                            className="rounded-xl border border-stone-100 bg-stone-50 px-4 py-3 text-left text-sm font-medium text-stone-800 transition hover:border-stone-300 hover:bg-white disabled:opacity-50"
+                        >
+                            {t.label}
                         </button>
                     ))}
                 </div>
 
-                <button
-                    onClick={onStartInterview}
-                    className="mt-5 flex w-full items-center justify-between rounded-xl border border-stone-900 bg-stone-900 px-4 py-3 text-left text-white transition hover:bg-stone-800"
-                >
-                    <div>
-                        <div className="text-sm font-semibold">Start a mock interview</div>
-                        <div className="text-xs text-stone-300">Full conversational interview with AI · ~15 min</div>
-                    </div>
-                    <span className="text-lg">→</span>
-                </button>
-            </section>
-
-            {query ? (
-                <section className="rounded-2xl border border-stone-200 bg-white p-6">
-                    <div className="mb-4 flex items-baseline justify-between">
-                        <h2 className="text-lg font-semibold tracking-tight">Results for "{search}"</h2>
-                        <span className="text-xs text-stone-500">{filtered.length} match{filtered.length === 1 ? '' : 'es'}</span>
-                    </div>
-                    {filtered.length > 0 ? (
-                        <div className="space-y-2">
-                            {filtered.map((slug) => (
-                                <button key={slug} onClick={() => pickTopic(slug)} disabled={loading} className="group flex w-full items-center justify-between rounded-xl border border-stone-100 bg-stone-50 px-4 py-3 text-left transition hover:border-stone-300 hover:bg-white disabled:opacity-50">
-                                    <div>
-                                        <div className="text-sm font-medium text-stone-900">{labelFor(slug)}</div>
-                                        <div className="text-xs text-stone-500">{recent.includes(slug) ? 'Recently searched' : 'Suggested'}</div>
-                                    </div>
-                                    <span className="text-xs text-stone-400 group-hover:text-stone-700">Practice →</span>
+                {recent.length > 0 && (
+                    <div className="mt-4">
+                        <div className="mb-2 text-xs font-medium text-stone-500">Recent</div>
+                        <div className="flex flex-wrap gap-2">
+                            {recent.slice(0, 6).map((t) => (
+                                <button
+                                    key={t}
+                                    onClick={() => onStart(t)}
+                                    disabled={loading}
+                                    className="rounded-full border border-stone-200 bg-white px-3 py-1 text-xs text-stone-700 transition hover:border-stone-300 disabled:opacity-50"
+                                >
+                                    {labelFor(t)}
                                 </button>
                             ))}
                         </div>
-                    ) : (
-                        <p className="text-sm text-stone-600">No matching topics — click <b>Search</b> to try "{search}" anyway.</p>
-                    )}
-                </section>
-            ) : (
-                <>
-                    {recent.length > 0 && (
-                        <section className="rounded-2xl border border-stone-200 bg-white p-6">
-                            <div className="mb-4 flex items-baseline justify-between">
-                                <h2 className="text-lg font-semibold tracking-tight">Your recent topics</h2>
-                                <span className="text-xs text-stone-500">Just for you</span>
-                            </div>
-                            <div className="space-y-2">
-                                {recent.map((slug) => (
-                                    <button key={slug} onClick={() => pickTopic(slug)} disabled={loading} className="group flex w-full items-center justify-between rounded-xl border border-stone-100 bg-stone-50 px-4 py-3 text-left transition hover:border-stone-300 hover:bg-white disabled:opacity-50">
-                                        <div>
-                                            <div className="text-sm font-medium text-stone-900">{labelFor(slug)}</div>
-                                            <div className="text-xs text-stone-500">Recently searched</div>
-                                        </div>
-                                        <span className="text-xs text-stone-400 group-hover:text-stone-700">Practice →</span>
+                    </div>
+                )}
+
+                <form onSubmit={submitCustom} className="mt-4">
+                    <div className="mb-1 text-xs font-medium text-stone-500">Or any topic</div>
+                    <div className="relative flex gap-2">
+                        <input
+                            value={customTopic}
+                            onChange={(e) => { setCustomTopic(e.target.value); setShowSuggestions(true); }}
+                            onFocus={() => setShowSuggestions(true)}
+                            onBlur={() => setTimeout(() => setShowSuggestions(false), 150)}
+                            placeholder="e.g. React hooks, Kubernetes, TLS handshake"
+                            className="flex-1 rounded-lg border border-stone-200 bg-white px-3 py-2 text-sm placeholder-stone-400 focus:border-stone-400 focus:outline-none"
+                        />
+                        <button
+                            type="submit"
+                            disabled={loading || !customTopic.trim()}
+                            className="rounded-lg bg-stone-900 px-4 py-2 text-sm font-medium text-white transition hover:bg-stone-800 disabled:opacity-50"
+                        >
+                            {loading ? '…' : 'Start'}
+                        </button>
+                        {showSuggestions && filteredSuggestions.length > 0 && (
+                            <div className="absolute left-0 right-0 top-full z-20 mt-1 max-h-56 overflow-y-auto rounded-lg border border-stone-200 bg-white shadow-sm">
+                                {filteredSuggestions.map((s) => (
+                                    <button
+                                        key={s}
+                                        type="button"
+                                        onMouseDown={(e) => e.preventDefault()}
+                                        onClick={() => { setCustomTopic(s); setShowSuggestions(false); onStart(s); }}
+                                        className="block w-full px-3 py-1.5 text-left text-sm text-stone-800 hover:bg-stone-50"
+                                    >
+                                        {s}
                                     </button>
                                 ))}
                             </div>
-                        </section>
-                    )}
+                        )}
+                    </div>
+                </form>
+            </section>
 
-                    <section className="rounded-2xl border border-stone-200 bg-white p-6">
-                        <div className="mb-4 flex items-baseline justify-between">
-                            <h2 className="text-lg font-semibold tracking-tight">{popularTopics.length > 0 ? 'Popular topics' : 'Suggested topics'}</h2>
-                            <span className="text-xs text-stone-500">{popularTopics.length > 0 ? 'Trending across all users' : 'Get started with these'}</span>
+            <section className="rounded-2xl border border-stone-200 bg-white p-6">
+                <div className="flex items-start justify-between gap-4">
+                    <div>
+                        <h2 className="text-sm font-semibold uppercase tracking-wide text-stone-500">Mock interview</h2>
+                        <p className="mt-1 text-sm text-stone-700">Practice with an AI interviewer. Speak or type.</p>
+                    </div>
+                    <button
+                        onClick={onStartInterview}
+                        className="shrink-0 rounded-lg bg-stone-900 px-4 py-2 text-sm font-medium text-white transition hover:bg-stone-800"
+                    >
+                        Start
+                    </button>
+                </div>
+
+                {pastInterviews.length > 0 && (
+                    <div className="mt-4 border-t border-stone-100 pt-4">
+                        <div className="mb-2 text-xs font-medium text-stone-500">Past sessions</div>
+                        <div className="space-y-1">
+                            {pastInterviews.slice(0, 5).map((s) => {
+                                const date = new Date(s.created_at).toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+                                const score = s.evaluation?.overall_score;
+                                return (
+                                    <button
+                                        key={s.id}
+                                        onClick={() => onOpenPastInterview(s)}
+                                        className="flex w-full items-center justify-between rounded-lg px-2 py-2 text-left text-sm transition hover:bg-stone-50"
+                                    >
+                                        <span className="min-w-0 flex-1 truncate text-stone-800">{s.focus}</span>
+                                        <span className="ml-2 shrink-0 text-xs text-stone-500">{date}</span>
+                                        {typeof score === 'number' && (
+                                            <span className="ml-3 shrink-0 tabular-nums text-xs font-medium text-stone-900">{score}/10</span>
+                                        )}
+                                    </button>
+                                );
+                            })}
                         </div>
-                        <div className="space-y-2">
-                            {basePopular.filter((t) => !recent.includes(t.slug)).map((t) => (
-                                <button key={t.slug} onClick={() => pickTopic(t.slug)} disabled={loading} className="group flex w-full items-center justify-between rounded-xl border border-stone-100 bg-stone-50 px-4 py-3 text-left transition hover:border-stone-300 hover:bg-white disabled:opacity-50">
-                                    <div>
-                                        <div className="text-sm font-medium text-stone-900">{labelFor(t.slug)}</div>
-                                        <div className="text-xs text-stone-500">{t.attempts > 0 ? `${t.attempts} attempt${t.attempts === 1 ? '' : 's'} by users` : 'No attempts yet'}</div>
-                                    </div>
-                                    <span className="text-xs text-stone-400 group-hover:text-stone-700">Start →</span>
-                                </button>
-                            ))}
-                        </div>
-                    </section>
-                </>
+                    </div>
+                )}
+            </section>
+
+            {showStreak && (
+                <StreakCalendar attempts={attempts} stats={stats} onClose={() => setShowStreak(false)} />
             )}
-
-            {showCalendar && <StreakCalendar attempts={attempts} stats={stats} onClose={() => setShowCalendar(false)} />}
         </div>
     );
 }
@@ -782,6 +939,8 @@ function Stat({ label, value }: { label: string; value: string }) {
         </div>
     );
 }
+
+
 
 function StreakCalendar({ attempts, stats, onClose }: { attempts: Attempt[]; stats: Stats; onClose: () => void; }) {
     const activeDays = new Set(attempts.map((a) => new Date(a.created_at).toISOString().slice(0, 10)));
@@ -800,9 +959,9 @@ function StreakCalendar({ attempts, stats, onClose }: { attempts: Attempt[]; sta
     for (let i = 0; i < cells.length; i += 7) weeks.push(cells.slice(i, i + 7));
     const monthLabel = today.toLocaleDateString(undefined, { month: 'long', year: 'numeric' });
 
-    return (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-stone-900/40 p-4" onClick={onClose}>
-            <div className="w-full max-w-md rounded-2xl border border-stone-200 bg-white p-6" onClick={(e) => e.stopPropagation()}>
+    return createPortal(
+        <div className="fixed inset-0 z-[9999] flex items-center justify-center bg-stone-900/40 backdrop-blur-sm" onClick={onClose}>
+            <div className="w-full max-w-md rounded-2xl border border-stone-200 bg-white p-6 shadow-xl" onClick={(e) => e.stopPropagation()}>
                 <div className="mb-4 flex items-center justify-between">
                     <div>
                         <h3 className="text-base font-semibold">Your streak</h3>
@@ -833,7 +992,8 @@ function StreakCalendar({ attempts, stats, onClose }: { attempts: Attempt[]; sta
                     <span>More</span>
                 </div>
             </div>
-        </div>
+        </div>,
+        document.body
     );
 }
 
@@ -871,9 +1031,10 @@ function QuestionScreen({ question, answer, onAnswer, hint, loading, questionInd
     );
 }
 
-function FeedbackScreen({ question, answer, feedback, videos, questionIndex, sessionLength, onNext, onExit, loading }: { question: Question; answer: string; feedback: GradeResult; videos: Video[]; questionIndex: number; sessionLength: number; onNext: () => void; onExit: () => void; loading: boolean; }) {
+function FeedbackScreen({ question, answer, feedback, videos, questionIndex, sessionLength, onNext, onFinish, onExit, loading }: { question: Question; answer: string; feedback: GradeResult; videos: Video[]; questionIndex: number; sessionLength: number; onNext: () => void; onFinish: () => void; onExit: () => void; loading: boolean; }) {
     const verdictLabel = feedback.verdict === 'correct' ? 'Correct' : feedback.verdict === 'partial' ? 'Partially correct' : 'Incorrect';
     const verdictStyles = feedback.verdict === 'correct' ? 'border-emerald-200 bg-emerald-50 text-emerald-800' : feedback.verdict === 'partial' ? 'border-amber-200 bg-amber-50 text-amber-800' : 'border-red-200 bg-red-50 text-red-800';
+    const isLast = questionIndex >= sessionLength;
     return (
         <div className="space-y-4">
             <div className="flex items-center justify-between">
@@ -932,8 +1093,140 @@ function FeedbackScreen({ question, answer, feedback, videos, questionIndex, ses
             )}
             <div className="flex items-center gap-3 pt-2">
                 <button onClick={onExit} className="rounded-lg border border-stone-200 bg-white px-4 py-2 text-sm text-stone-700 transition hover:border-stone-300">Exit session</button>
-                <button onClick={onNext} disabled={loading} className="ml-auto rounded-lg bg-stone-900 px-5 py-2 text-sm font-medium text-white transition hover:bg-stone-800 disabled:opacity-50">
-                    {loading ? 'Loading…' : 'Next question'}
+                {isLast ? (
+                    <button onClick={onFinish} disabled={loading} className="ml-auto rounded-lg bg-emerald-700 px-5 py-2 text-sm font-medium text-white transition hover:bg-emerald-800 disabled:opacity-50">
+                        Finish session →
+                    </button>
+                ) : (
+                    <button onClick={onNext} disabled={loading} className="ml-auto rounded-lg bg-stone-900 px-5 py-2 text-sm font-medium text-white transition hover:bg-stone-800 disabled:opacity-50">
+                        {loading ? 'Loading…' : 'Next question'}
+                    </button>
+                )}
+            </div>
+        </div>
+    );
+}
+
+// ============================================================
+// Session summary
+// ============================================================
+
+function SessionSummaryScreen({ topic, results, onDone }: { topic: string; results: SessionResult[]; onDone: () => void; }) {
+    const totalScore = results.reduce((sum, r) => sum + r.score, 0);
+    const maxScore = results.length * 10;
+    const percentage = maxScore > 0 ? Math.round((totalScore / maxScore) * 100) : 0;
+    const correctCount = results.filter((r) => r.verdict === 'correct').length;
+    const partialCount = results.filter((r) => r.verdict === 'partial').length;
+    const incorrectCount = results.filter((r) => r.verdict === 'incorrect').length;
+    const hintsUsed = results.reduce((sum, r) => sum + r.hints_used, 0);
+
+    const missedTally = new Map<string, number>();
+    results.forEach((r) => r.missed_concepts.forEach((c) => missedTally.set(c, (missedTally.get(c) ?? 0) + 1)));
+    const topWeaknesses = [...missedTally.entries()].sort((a, b) => b[1] - a[1]).slice(0, 5);
+
+    const strongTally = new Map<string, number>();
+    results.forEach((r) => r.strong_concepts.forEach((c) => strongTally.set(c, (strongTally.get(c) ?? 0) + 1)));
+    const topStrengths = [...strongTally.entries()].sort((a, b) => b[1] - a[1]).slice(0, 5);
+
+    const weakest = [...results].sort((a, b) => a.score - b.score)[0];
+
+    const scoreColor = percentage >= 80 ? 'text-emerald-700' : percentage >= 60 ? 'text-amber-700' : 'text-red-700';
+    const headline = percentage >= 80 ? 'Great session!' : percentage >= 60 ? 'Solid session.' : "Keep practicing — you're getting there.";
+
+    return (
+        <div className="space-y-4">
+            <div>
+                <div className="text-xs uppercase tracking-wide text-stone-500">Session complete</div>
+                <h1 className="mt-1 text-2xl font-semibold tracking-tight">{labelFor(topic)}</h1>
+            </div>
+
+            <div className="rounded-2xl border border-stone-200 bg-white p-6">
+                <div className="flex items-start justify-between gap-4">
+                    <div>
+                        <div className="text-xs font-semibold uppercase tracking-wide text-stone-500">Your total</div>
+                        <div className="mt-1 text-base font-semibold text-stone-900">{headline}</div>
+                    </div>
+                    <div className={`text-3xl font-semibold tabular-nums ${scoreColor}`}>{totalScore}/{maxScore}</div>
+                </div>
+                <div className="mt-4 h-2 w-full overflow-hidden rounded-full bg-stone-100">
+                    <div className={`h-full ${percentage >= 80 ? 'bg-emerald-600' : percentage >= 60 ? 'bg-amber-500' : 'bg-red-500'}`} style={{ width: `${percentage}%` }} />
+                </div>
+                <div className="mt-4 grid grid-cols-4 gap-3 text-center">
+                    <div className="rounded-xl border border-stone-100 bg-stone-50 p-3">
+                        <div className="text-xs uppercase tracking-wide text-stone-500">Correct</div>
+                        <div className="mt-1 text-lg font-semibold text-emerald-700">{correctCount}</div>
+                    </div>
+                    <div className="rounded-xl border border-stone-100 bg-stone-50 p-3">
+                        <div className="text-xs uppercase tracking-wide text-stone-500">Partial</div>
+                        <div className="mt-1 text-lg font-semibold text-amber-700">{partialCount}</div>
+                    </div>
+                    <div className="rounded-xl border border-stone-100 bg-stone-50 p-3">
+                        <div className="text-xs uppercase tracking-wide text-stone-500">Missed</div>
+                        <div className="mt-1 text-lg font-semibold text-red-700">{incorrectCount}</div>
+                    </div>
+                    <div className="rounded-xl border border-stone-100 bg-stone-50 p-3">
+                        <div className="text-xs uppercase tracking-wide text-stone-500">Hints</div>
+                        <div className="mt-1 text-lg font-semibold text-stone-800">{hintsUsed}</div>
+                    </div>
+                </div>
+            </div>
+
+            {topWeaknesses.length > 0 && (
+                <div className="rounded-2xl border border-amber-200 bg-amber-50 p-6">
+                    <div className="text-xs font-semibold uppercase tracking-wide text-amber-800">Focus on these next</div>
+                    <p className="mt-1 text-xs text-amber-800">Concepts you missed most often in this session</p>
+                    <ul className="mt-3 space-y-1 text-sm text-amber-900">
+                        {topWeaknesses.map(([concept, count]) => (
+                            <li key={concept} className="flex items-center justify-between">
+                                <span>· {concept}</span>
+                                <span className="text-xs text-amber-700">{count}× missed</span>
+                            </li>
+                        ))}
+                    </ul>
+                </div>
+            )}
+
+            {topStrengths.length > 0 && (
+                <div className="rounded-2xl border border-emerald-200 bg-emerald-50 p-6">
+                    <div className="text-xs font-semibold uppercase tracking-wide text-emerald-800">You nailed these</div>
+                    <ul className="mt-2 space-y-1 text-sm text-emerald-900">
+                        {topStrengths.map(([concept, count]) => (
+                            <li key={concept} className="flex items-center justify-between">
+                                <span>· {concept}</span>
+                                <span className="text-xs text-emerald-700">{count}× strong</span>
+                            </li>
+                        ))}
+                    </ul>
+                </div>
+            )}
+
+            {weakest && weakest.score < 7 && (
+                <div className="rounded-2xl border border-stone-200 bg-white p-6">
+                    <div className="text-xs font-semibold uppercase tracking-wide text-stone-500">Toughest question</div>
+                    <p className="mt-2 text-sm text-stone-800">"{weakest.question_text}"</p>
+                    <div className="mt-2 text-xs text-stone-500">Scored {weakest.score}/10</div>
+                </div>
+            )}
+
+            <div className="rounded-2xl border border-stone-200 bg-white p-6">
+                <div className="text-xs font-semibold uppercase tracking-wide text-stone-500">All questions</div>
+                <div className="mt-3 space-y-2">
+                    {results.map((r, i) => {
+                        const color = r.verdict === 'correct' ? 'bg-emerald-500' : r.verdict === 'partial' ? 'bg-amber-500' : 'bg-red-500';
+                        return (
+                            <div key={i} className="flex items-center gap-3 text-sm">
+                                <span className={`h-2 w-2 shrink-0 rounded-full ${color}`} />
+                                <span className="flex-1 truncate text-stone-700">Q{i + 1}. {r.question_text}</span>
+                                <span className="shrink-0 tabular-nums font-medium text-stone-900">{r.score}/10</span>
+                            </div>
+                        );
+                    })}
+                </div>
+            </div>
+
+            <div className="flex justify-end pt-2">
+                <button onClick={onDone} className="rounded-lg bg-stone-900 px-5 py-2 text-sm font-medium text-white transition hover:bg-stone-800">
+                    Back to dashboard
                 </button>
             </div>
         </div>
@@ -941,7 +1234,7 @@ function FeedbackScreen({ question, answer, feedback, videos, questionIndex, ses
 }
 
 // ============================================================
-// InterviewPicker + InterviewScreen (Phase 2)
+// Interview picker + screen
 // ============================================================
 
 function InterviewPicker({ onCancel, onPick }: { onCancel: () => void; onPick: (focus: string) => void; }) {
@@ -1006,7 +1299,6 @@ function InterviewScreen({ focus, transcript, loading, onSend, onEnd }: { focus:
     const recognitionRef = useRef<any>(null);
     const spokenIndexRef = useRef<number>(-1);
 
-    // Browser support flags
     const SR: any =
         typeof window !== 'undefined'
             ? (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition
@@ -1014,7 +1306,6 @@ function InterviewScreen({ focus, transcript, loading, onSend, onEnd }: { focus:
     const speechAvailable = typeof window !== 'undefined' && 'speechSynthesis' in window;
     const micAvailable = !!SR;
 
-    // Speak new interviewer messages
     useEffect(() => {
         if (!voiceOn || !speechAvailable) return;
         for (let i = spokenIndexRef.current + 1; i < transcript.length; i++) {
@@ -1023,7 +1314,6 @@ function InterviewScreen({ focus, transcript, loading, onSend, onEnd }: { focus:
                 const u = new SpeechSynthesisUtterance(turn.content);
                 u.rate = 1.0;
                 u.pitch = 1.0;
-                // Try to pick a natural English voice
                 const voices = window.speechSynthesis.getVoices();
                 const preferred =
                     voices.find((v) => /en-US/i.test(v.lang) && /Google|Samantha|Natural/i.test(v.name)) ||
@@ -1036,7 +1326,6 @@ function InterviewScreen({ focus, transcript, loading, onSend, onEnd }: { focus:
         }
     }, [transcript, voiceOn, speechAvailable]);
 
-    // Stop all speech + mic on unmount
     useEffect(() => {
         return () => {
             if (speechAvailable) window.speechSynthesis.cancel();
@@ -1046,7 +1335,6 @@ function InterviewScreen({ focus, transcript, loading, onSend, onEnd }: { focus:
         };
     }, [speechAvailable]);
 
-    // Auto-scroll to bottom
     useEffect(() => {
         scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: 'smooth' });
     }, [transcript, loading, interimText]);
@@ -1059,7 +1347,6 @@ function InterviewScreen({ focus, transcript, loading, onSend, onEnd }: { focus:
 
     function startListening() {
         if (!micAvailable || loading) return;
-        // Cancel any interviewer speech so we hear the user cleanly
         if (speechAvailable) window.speechSynthesis.cancel();
 
         const rec = new SR();
@@ -1081,8 +1368,7 @@ function InterviewScreen({ focus, transcript, loading, onSend, onEnd }: { focus:
         rec.onerror = () => { setListening(false); };
         rec.onend = () => {
             setListening(false);
-            const combined = (finalText + ' ' + interimText).trim();
-            const toSend = combined || interimText.trim();
+            const toSend = finalText.trim();
             setInterimText('');
             if (toSend) onSend(toSend);
         };
@@ -1173,10 +1459,7 @@ function InterviewScreen({ focus, transcript, loading, onSend, onEnd }: { focus:
                     <button
                         onClick={listening ? stopListening : startListening}
                         disabled={loading}
-                        className={`flex w-full items-center justify-center gap-3 rounded-2xl px-4 py-4 text-sm font-medium transition disabled:opacity-50 ${listening
-                                ? 'bg-red-600 text-white hover:bg-red-700'
-                                : 'bg-stone-900 text-white hover:bg-stone-800'
-                            }`}
+                        className={`flex w-full items-center justify-center gap-3 rounded-2xl px-4 py-4 text-sm font-medium transition disabled:opacity-50 ${listening ? 'bg-red-600 text-white hover:bg-red-700' : 'bg-stone-900 text-white hover:bg-stone-800'}`}
                     >
                         {listening ? (
                             <>
@@ -1214,10 +1497,180 @@ function InterviewScreen({ focus, transcript, loading, onSend, onEnd }: { focus:
 }
 
 // ============================================================
-// Profile screens
+// Interview evaluation + past viewer
 // ============================================================
 
-type Modal = null | 'email' | 'password' | 'display_name' | 'notifications' | 'difficulty';
+function InterviewEvaluationScreen({ focus, transcript, evaluation, loading, onDone }: { focus: string; transcript: InterviewTurn[]; evaluation: InterviewEvaluation | null; loading: boolean; onDone: () => void; }) {
+    if (loading && !evaluation) {
+        return (
+            <div className="flex min-h-[60vh] flex-col items-center justify-center gap-4 text-center">
+                <div className="inline-flex gap-1">
+                    <span className="h-3 w-3 animate-bounce rounded-full bg-stone-400 [animation-delay:-0.3s]" />
+                    <span className="h-3 w-3 animate-bounce rounded-full bg-stone-400 [animation-delay:-0.15s]" />
+                    <span className="h-3 w-3 animate-bounce rounded-full bg-stone-400" />
+                </div>
+                <div className="text-sm text-stone-600">Evaluating your interview…</div>
+                <div className="text-xs text-stone-500">Reviewing {transcript.length} messages</div>
+            </div>
+        );
+    }
+
+    if (!evaluation) {
+        return (
+            <div className="space-y-4">
+                <div className="rounded-2xl border border-amber-200 bg-amber-50 p-6 text-sm text-amber-800">
+                    Couldn't generate an evaluation for this interview. Your transcript was still saved and you can view it from the dashboard.
+                </div>
+                <button onClick={onDone} className="rounded-lg bg-stone-900 px-5 py-2 text-sm font-medium text-white transition hover:bg-stone-800">
+                    Back to dashboard
+                </button>
+            </div>
+        );
+    }
+
+    const score = evaluation.overall_score;
+    const scoreColor = typeof score === 'number' && score >= 8 ? 'text-emerald-700' : typeof score === 'number' && score >= 6 ? 'text-amber-700' : 'text-red-700';
+    const strengths = evaluation.strengths ?? [];
+    const weaknesses = evaluation.weaknesses ?? [];
+    const recommendations = evaluation.recommendations ?? [];
+    const topicScores = evaluation.topic_scores ?? {};
+
+    return (
+        <div className="space-y-4">
+            <div>
+                <div className="text-xs uppercase tracking-wide text-stone-500">Interview results</div>
+                <h1 className="mt-1 text-2xl font-semibold tracking-tight">{focus}</h1>
+            </div>
+
+            <div className="rounded-2xl border border-stone-200 bg-white p-6">
+                <div className="flex items-start justify-between gap-4">
+                    <div>
+                        <div className="text-xs font-semibold uppercase tracking-wide text-stone-500">Overall</div>
+                        {evaluation.verdict && (
+                            <div className="mt-1 text-base font-semibold text-stone-900">{evaluation.verdict}</div>
+                        )}
+                    </div>
+                    {typeof score === 'number' && (
+                        <div className={`text-3xl font-semibold tabular-nums ${scoreColor}`}>{score}/10</div>
+                    )}
+                </div>
+                {evaluation.summary && (
+                    <p className="mt-4 text-sm leading-relaxed text-stone-800">{evaluation.summary}</p>
+                )}
+            </div>
+
+            {Object.keys(topicScores).length > 0 && (
+                <div className="rounded-2xl border border-stone-200 bg-white p-6">
+                    <div className="text-xs font-semibold uppercase tracking-wide text-stone-500">Topic scores</div>
+                    <div className="mt-3 space-y-2">
+                        {Object.entries(topicScores).map(([topic, s]) => (
+                            <div key={topic} className="flex items-center justify-between text-sm">
+                                <span className="text-stone-800">{topic}</span>
+                                <span className="tabular-nums font-medium text-stone-900">{s}/10</span>
+                            </div>
+                        ))}
+                    </div>
+                </div>
+            )}
+
+            {strengths.length > 0 && (
+                <div className="rounded-2xl border border-emerald-200 bg-emerald-50 p-6">
+                    <div className="text-xs font-semibold uppercase tracking-wide text-emerald-800">Strengths</div>
+                    <ul className="mt-2 space-y-1 text-sm text-emerald-900">
+                        {strengths.map((s, i) => <li key={i}>· {s}</li>)}
+                    </ul>
+                </div>
+            )}
+
+            {weaknesses.length > 0 && (
+                <div className="rounded-2xl border border-amber-200 bg-amber-50 p-6">
+                    <div className="text-xs font-semibold uppercase tracking-wide text-amber-800">Areas to improve</div>
+                    <ul className="mt-2 space-y-1 text-sm text-amber-900">
+                        {weaknesses.map((w, i) => <li key={i}>· {w}</li>)}
+                    </ul>
+                </div>
+            )}
+
+            {recommendations.length > 0 && (
+                <div className="rounded-2xl border border-stone-200 bg-white p-6">
+                    <div className="text-xs font-semibold uppercase tracking-wide text-stone-500">Recommended next steps</div>
+                    <ul className="mt-2 space-y-1 text-sm text-stone-800">
+                        {recommendations.map((r, i) => <li key={i}>· {r}</li>)}
+                    </ul>
+                </div>
+            )}
+
+            <div className="flex justify-end pt-2">
+                <button onClick={onDone} className="rounded-lg bg-stone-900 px-5 py-2 text-sm font-medium text-white transition hover:bg-stone-800">
+                    Done
+                </button>
+            </div>
+        </div>
+    );
+}
+
+function PastInterviewViewer({ session, onClose }: { session: InterviewSessionRow; onClose: () => void; }) {
+    const date = new Date(session.created_at).toLocaleDateString(undefined, { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' });
+    const evaluation = session.evaluation;
+
+    return (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-stone-900/40 p-4" onClick={onClose}>
+            <div className="max-h-[90vh] w-full max-w-2xl overflow-y-auto rounded-2xl border border-stone-200 bg-white p-6" onClick={(e) => e.stopPropagation()}>
+                <div className="mb-4 flex items-start justify-between gap-4">
+                    <div>
+                        <h3 className="text-base font-semibold">{session.focus}</h3>
+                        <p className="text-xs text-stone-500">{date} · {session.turns_completed} turns</p>
+                    </div>
+                    <button onClick={onClose} className="text-stone-500 hover:text-stone-800">✕</button>
+                </div>
+
+                {evaluation && (
+                    <div className="mb-4 rounded-xl border border-stone-200 bg-stone-50 p-4">
+                        <div className="flex items-start justify-between">
+                            <div className="text-xs font-semibold uppercase tracking-wide text-stone-500">Evaluation</div>
+                            {typeof evaluation.overall_score === 'number' && (
+                                <div className="text-lg font-semibold tabular-nums">{evaluation.overall_score}/10</div>
+                            )}
+                        </div>
+                        {evaluation.verdict && <div className="mt-1 text-sm font-medium text-stone-900">{evaluation.verdict}</div>}
+                        {evaluation.summary && <p className="mt-2 text-sm text-stone-700">{evaluation.summary}</p>}
+                        {evaluation.strengths && evaluation.strengths.length > 0 && (
+                            <div className="mt-3">
+                                <div className="text-xs font-semibold text-emerald-700">Strengths</div>
+                                <ul className="mt-1 text-xs text-stone-700">
+                                    {evaluation.strengths.map((s, i) => <li key={i}>· {s}</li>)}
+                                </ul>
+                            </div>
+                        )}
+                        {evaluation.weaknesses && evaluation.weaknesses.length > 0 && (
+                            <div className="mt-2">
+                                <div className="text-xs font-semibold text-amber-700">Areas to improve</div>
+                                <ul className="mt-1 text-xs text-stone-700">
+                                    {evaluation.weaknesses.map((w, i) => <li key={i}>· {w}</li>)}
+                                </ul>
+                            </div>
+                        )}
+                    </div>
+                )}
+
+                <div className="text-xs font-semibold uppercase tracking-wide text-stone-500">Transcript</div>
+                <div className="mt-2 space-y-2">
+                    {session.transcript.map((turn, i) => (
+                        <div key={i} className={`flex ${turn.role === 'candidate' ? 'justify-end' : 'justify-start'}`}>
+                            <div className={`max-w-[80%] rounded-2xl px-4 py-2 text-sm leading-relaxed ${turn.role === 'candidate' ? 'bg-stone-900 text-white' : 'border border-stone-200 bg-stone-50 text-stone-900'}`}>
+                                {turn.content}
+                            </div>
+                        </div>
+                    ))}
+                </div>
+            </div>
+        </div>
+    );
+}
+
+// ============================================================
+// Profile
+// ============================================================
 
 function ProfileScreen({ profile, email, stats, attemptsCount, onProfileChange }: { profile: Profile; email: string; stats: Stats; attemptsCount: number; onProfileChange: () => void; }) {
     const [modal, setModal] = useState<Modal>(null);
