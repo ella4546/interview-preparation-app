@@ -940,8 +940,6 @@ function Stat({ label, value }: { label: string; value: string }) {
     );
 }
 
-
-
 function StreakCalendar({ attempts, stats, onClose }: { attempts: Attempt[]; stats: Stats; onClose: () => void; }) {
     const activeDays = new Set(attempts.map((a) => new Date(a.created_at).toISOString().slice(0, 10)));
     const days = 84;
@@ -1246,9 +1244,9 @@ function InterviewPicker({ onCancel, onPick }: { onCancel: () => void; onPick: (
         { label: 'Coding fundamentals', value: 'Coding fundamentals interview', description: 'Data structures, algorithms, complexity' },
     ];
 
-    return (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-stone-900/40 p-4" onClick={onCancel}>
-            <div className="w-full max-w-md rounded-2xl border border-stone-200 bg-white p-6" onClick={(e) => e.stopPropagation()}>
+    return createPortal(
+        <div className="fixed inset-0 z-[9999] flex items-center justify-center bg-stone-900/40 backdrop-blur-sm p-4" onClick={onCancel}>
+            <div className="w-full max-w-md rounded-2xl border border-stone-200 bg-white p-6 shadow-xl" onClick={(e) => e.stopPropagation()}>
                 <div className="mb-4 flex items-center justify-between">
                     <div>
                         <h3 className="text-base font-semibold">Start a mock interview</h3>
@@ -1286,7 +1284,8 @@ function InterviewPicker({ onCancel, onPick }: { onCancel: () => void; onPick: (
                     </form>
                 </div>
             </div>
-        </div>
+        </div>,
+        document.body
     );
 }
 
@@ -1613,9 +1612,9 @@ function PastInterviewViewer({ session, onClose }: { session: InterviewSessionRo
     const date = new Date(session.created_at).toLocaleDateString(undefined, { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' });
     const evaluation = session.evaluation;
 
-    return (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-stone-900/40 p-4" onClick={onClose}>
-            <div className="max-h-[90vh] w-full max-w-2xl overflow-y-auto rounded-2xl border border-stone-200 bg-white p-6" onClick={(e) => e.stopPropagation()}>
+    return createPortal(
+        <div className="fixed inset-0 z-[9999] flex items-center justify-center bg-stone-900/40 backdrop-blur-sm p-4" onClick={onClose}>
+            <div className="max-h-[90vh] w-full max-w-2xl overflow-y-auto rounded-2xl border border-stone-200 bg-white p-6 shadow-xl" onClick={(e) => e.stopPropagation()}>
                 <div className="mb-4 flex items-start justify-between gap-4">
                     <div>
                         <h3 className="text-base font-semibold">{session.focus}</h3>
@@ -1664,7 +1663,8 @@ function PastInterviewViewer({ session, onClose }: { session: InterviewSessionRo
                     ))}
                 </div>
             </div>
-        </div>
+        </div>,
+        document.body
     );
 }
 
@@ -1792,9 +1792,9 @@ function SettingModal({ modal, profile, email, busy, setBusy, onClose, onDone }:
     };
     const ctaLabel = modal === 'password' ? 'Send reset link' : 'Save';
 
-    return (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-stone-900/40 p-4">
-            <div className="w-full max-w-sm rounded-2xl border border-stone-200 bg-white p-6">
+    return createPortal(
+        <div className="fixed inset-0 z-[9999] flex items-center justify-center bg-stone-900/40 backdrop-blur-sm p-4">
+            <div className="w-full max-w-sm rounded-2xl border border-stone-200 bg-white p-6 shadow-xl">
                 <div className="mb-4 flex items-center justify-between">
                     <h3 className="text-base font-semibold">{titles[modal]}</h3>
                     <button onClick={onClose} className="text-stone-500 hover:text-stone-800">✕</button>
@@ -1829,6 +1829,7 @@ function SettingModal({ modal, profile, email, busy, setBusy, onClose, onDone }:
                     </button>
                 </div>
             </div>
-        </div>
+        </div>,
+        document.body
     );
 }
