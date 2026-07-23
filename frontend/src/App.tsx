@@ -210,15 +210,6 @@ function deriveSuggestedTopic(concept: string, originalTopic: string): string {
     return originalTopic;
 }
 
-async function loadNotebook(userId: string): Promise<NotebookEntry[]> {
-    const { data } = await supabase
-        .from('notebook_entries')
-        .select('*')
-        .eq('user_id', userId)
-        .order('created_at', { ascending: false });
-    return (data as NotebookEntry[]) || [];
-}
-
 async function addToNotebook(entry: Omit<NotebookEntry, 'id' | 'created_at'>): Promise<void> {
     await supabase.from('notebook_entries').insert(entry);
 }
@@ -533,7 +524,7 @@ function AuthedApp({ session }: { session: Session }) {
     const [notebookEntries, setNotebookEntries] = useState<NotebookEntry[]>([]);
     const [weaknesses, setWeaknesses] = useState<WeaknessAnalysis[]>([]);
     const [showNotebookAdder, setShowNotebookAdder] = useState(false);
-    const [notebookDraft, setNotebookDraft] = useState({ question_text: '', topic: '', my_answer: '', correct_concept: '', personal_note: '', missed_concepts: [] as string[], score: 0 });
+    const [notebookDraft, setNotebookDraft] = useState({ question_text: '', topic: '', my_answer: '', correct_concept: '', personal_note: '', missed_concepts: [] as string[], score: 0, reviewed: false });
 
     const loadAll = useCallback(async () => {
         const [{ data: p }, { data: a }, { data: pop }, { data: sessions }, { data: nb }] = await Promise.all([
@@ -790,6 +781,7 @@ function AuthedApp({ session }: { session: Session }) {
             personal_note: '',
             missed_concepts: feedback.missed_concepts,
             score: feedback.score,
+            reviewed: false,
         });
         setShowNotebookAdder(true);
     }
@@ -920,11 +912,11 @@ function AuthedApp({ session }: { session: Session }) {
                     onSave={async () => {
                         await saveToNotebook(notebookDraft);
                         setShowNotebookAdder(false);
-                        setNotebookDraft({ question_text: '', topic: '', my_answer: '', correct_concept: '', personal_note: '', missed_concepts: [], score: 0 });
+                        setNotebookDraft({ question_text: '', topic: '', my_answer: '', correct_concept: '', personal_note: '', missed_concepts: [], score: 0, reviewed: false });
                     }}
                     onCancel={() => {
                         setShowNotebookAdder(false);
-                        setNotebookDraft({ question_text: '', topic: '', my_answer: '', correct_concept: '', personal_note: '', missed_concepts: [], score: 0 });
+                        setNotebookDraft({ question_text: '', topic: '', my_answer: '', correct_concept: '', personal_note: '', missed_concepts: [], score: 0, reviewed: false });
                     }}
                 />
             )}
@@ -1519,7 +1511,7 @@ function SessionSummaryScreen({ topic, results, onDone }: { topic: string; resul
 function NotebookAdder({
     draft, onChange, onSave, onCancel,
 }: {
-    draft: { question_text: string; topic: string; my_answer: string; correct_concept: string; personal_note: string; missed_concepts: string[]; score: number };
+    draft: { question_text: string; topic: string; my_answer: string; correct_concept: string; personal_note: string; missed_concepts: string[]; score: number; reviewed: boolean };
     onChange: (d: typeof draft) => void;
     onSave: () => void;
     onCancel: () => void;
