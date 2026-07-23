@@ -15,6 +15,32 @@ import {
     Topic,
     Video,
 } from './lib/api';
+// ============================================================
+// Required Supabase schema additions:
+//
+// Table: notebook_entries
+//   id: uuid primary key default gen_random_uuid()
+//   user_id: uuid references auth.users(id)
+//   question_text: text
+//   topic: text
+//   my_answer: text
+//   correct_concept: text
+//   personal_note: text
+//   missed_concepts: text[] (array of strings)
+//   score: integer
+//   reviewed: boolean default false
+//   created_at: timestamptz default now()
+//
+// RLS policies:
+//   SELECT: auth.uid() = user_id
+//   INSERT: auth.uid() = user_id
+//   UPDATE: auth.uid() = user_id
+//   DELETE: auth.uid() = user_id
+//
+// Also ensure the 'attempts' table has a 'missed_concepts' column (text[])
+// for the weakness analysis to work properly.
+// ============================================================
+
 import { createPortal } from "react-dom";
 
 // ============================================================
@@ -89,6 +115,123 @@ function normalizeTopic(input: string): string {
 }
 
 // ============================================================
+// Notebook helpers
+// ============================================================
+
+function computeWeaknesses(attempts: Attempt[]): WeaknessAnalysis[] {
+    const conceptMap = new Map<string, { topic: string; dates: string[]; suggested: string }>();
+
+    attempts.forEach((a) => {
+        if (a.verdict === 'correct') return;
+        const missed = (a as any).missed_concepts || [];
+        missed.forEach((concept: string) => {
+            const key = concept.toLowerCase();
+            const existing = conceptMap.get(key);
+            if (existing) {
+                existing.dates.push(a.created_at);
+            } else {
+                conceptMap.set(key, {
+                    topic: a.topic,
+                    dates: [a.created_at],
+                    suggested: deriveSuggestedTopic(concept, a.topic),
+                });
+            }
+        });
+    });
+
+    return [...conceptMap.entries()]
+        .map(([concept, data]) => ({
+            concept,
+            topic: data.topic,
+            times_missed: data.dates.length,
+            last_missed: data.dates.sort().reverse()[0],
+            suggested_topic: data.suggested,
+        }))
+        .sort((a, b) => b.times_missed - a.times_missed)
+        .slice(0, 10);
+}
+
+function deriveSuggestedTopic(concept: string, originalTopic: string): string {
+    const conceptLower = concept.toLowerCase();
+    const topicLower = originalTopic.toLowerCase();
+
+    // React-specific mappings
+    if (topicLower.includes('react')) {
+        if (conceptLower.includes('hook')) return 'React hooks';
+        if (conceptLower.includes('state')) return 'React state management';
+        if (conceptLower.includes('lifecycle') || conceptLower.includes('effect')) return 'React useEffect';
+        if (conceptLower.includes('context')) return 'React Context API';
+        if (conceptLower.includes('memo')) return 'React performance optimization';
+        if (conceptLower.includes('ref')) return 'React useRef';
+        if (conceptLower.includes('reducer')) return 'React useReducer';
+        if (conceptLower.includes('router')) return 'React Router';
+        return 'React fundamentals';
+    }
+
+    // System design
+    if (topicLower.includes('system design') || conceptLower.includes('scal') || conceptLower.includes('load')) {
+        if (conceptLower.includes('cache')) return 'Caching strategies';
+        if (conceptLower.includes('database') || conceptLower.includes('db')) return 'Database design';
+        if (conceptLower.includes('load')) return 'Load balancing';
+        if (conceptLower.includes('queue')) return 'Message queues';
+        if (conceptLower.includes('micro')) return 'Microservices';
+        return 'System design fundamentals';
+    }
+
+    // Data structures
+    if (conceptLower.includes('tree') || conceptLower.includes('bst')) return 'Binary trees';
+    if (conceptLower.includes('graph')) return 'Graph algorithms';
+    if (conceptLower.includes('hash')) return 'Hash tables';
+    if (conceptLower.includes('heap')) return 'Heaps and priority queues';
+    if (conceptLower.includes('linked')) return 'Linked lists';
+    if (conceptLower.includes('stack') || conceptLower.includes('queue')) return 'Stacks and queues';
+
+    // Algorithms
+    if (conceptLower.includes('sort')) return 'Sorting algorithms';
+    if (conceptLower.includes('search')) return 'Search algorithms';
+    if (conceptLower.includes('dynamic') || conceptLower.includes('dp')) return 'Dynamic programming';
+    if (conceptLower.includes('recursion')) return 'Recursion';
+    if (conceptLower.includes('greedy')) return 'Greedy algorithms';
+
+    // Networks
+    if (conceptLower.includes('tcp') || conceptLower.includes('handshake')) return 'TCP/IP';
+    if (conceptLower.includes('http')) return 'HTTP and HTTPS';
+    if (conceptLower.includes('dns')) return 'DNS';
+    if (conceptLower.includes('tls') || conceptLower.includes('ssl')) return 'TLS/SSL';
+
+    // Databases
+    if (conceptLower.includes('index')) return 'Database indexing';
+    if (conceptLower.includes('join')) return 'SQL joins';
+    if (conceptLower.includes('normal')) return 'Database normalization';
+    if (conceptLower.includes('transaction')) return 'ACID transactions';
+    if (conceptLower.includes('shard')) return 'Database sharding';
+
+    // General fallback
+    return originalTopic;
+}
+
+async function loadNotebook(userId: string): Promise<NotebookEntry[]> {
+    const { data } = await supabase
+        .from('notebook_entries')
+        .select('*')
+        .eq('user_id', userId)
+        .order('created_at', { ascending: false });
+    return (data as NotebookEntry[]) || [];
+}
+
+async function addToNotebook(entry: Omit<NotebookEntry, 'id' | 'created_at'>): Promise<void> {
+    await supabase.from('notebook_entries').insert(entry);
+}
+
+async function updateNotebookEntry(id: string, updates: Partial<NotebookEntry>): Promise<void> {
+    await supabase.from('notebook_entries').update(updates).eq('id', id);
+}
+
+async function deleteNotebookEntry(id: string): Promise<void> {
+    await supabase.from('notebook_entries').delete().eq('id', id);
+}
+
+// ============================================================
 // Types
 // ============================================================
 
@@ -99,7 +242,8 @@ type Screen =
     | 'profile'
     | 'interview'
     | 'interview-eval'
-    | 'session-summary';
+    | 'session-summary'
+    | 'notebook';
 
 type SessionResult = {
     question_text: string;
@@ -134,7 +278,33 @@ type InterviewSessionRow = {
     created_at: string;
 };
 
-type Modal = null | 'email' | 'password' | 'display_name' | 'notifications' | 'difficulty';
+type Modal = null | 'email' | 'password' | 'display_name' | 'difficulty';
+
+// ============================================================
+// Mistake Notebook Types
+// ============================================================
+
+type NotebookEntry = {
+    id: string;
+    user_id: string;
+    question_text: string;
+    topic: string;
+    my_answer: string;
+    correct_concept: string;
+    personal_note: string;
+    missed_concepts: string[];
+    score: number;
+    reviewed: boolean;
+    created_at: string;
+};
+
+type WeaknessAnalysis = {
+    concept: string;
+    topic: string;
+    times_missed: number;
+    last_missed: string;
+    suggested_topic: string;
+};
 
 // ============================================================
 // Root
@@ -202,8 +372,9 @@ function AuthScreens() {
                 const { error } = await supabase.auth.signInWithPassword({ email, password });
                 if (error) throw error;
             } else {
+                const appUrl = typeof window !== 'undefined' ? window.location.origin : '';
                 const { error } = await supabase.auth.resetPasswordForEmail(email, {
-                    redirectTo: window.location.origin,
+                    redirectTo: `${appUrl}/auth/callback`,
                 });
                 if (error) throw error;
                 setInfo('Check your inbox for a password reset link.');
@@ -359,13 +530,18 @@ function AuthedApp({ session }: { session: Session }) {
     const [evaluatingInterview, setEvaluatingInterview] = useState(false);
     const [pastInterviews, setPastInterviews] = useState<InterviewSessionRow[]>([]);
     const [viewingSession, setViewingSession] = useState<InterviewSessionRow | null>(null);
+    const [notebookEntries, setNotebookEntries] = useState<NotebookEntry[]>([]);
+    const [weaknesses, setWeaknesses] = useState<WeaknessAnalysis[]>([]);
+    const [showNotebookAdder, setShowNotebookAdder] = useState(false);
+    const [notebookDraft, setNotebookDraft] = useState({ question_text: '', topic: '', my_answer: '', correct_concept: '', personal_note: '', missed_concepts: [] as string[], score: 0 });
 
     const loadAll = useCallback(async () => {
-        const [{ data: p }, { data: a }, { data: pop }, { data: sessions }] = await Promise.all([
+        const [{ data: p }, { data: a }, { data: pop }, { data: sessions }, { data: nb }] = await Promise.all([
             supabase.from('profiles').select('*').eq('user_id', user.id).single(),
             supabase.from('attempts').select('*').eq('user_id', user.id).order('created_at', { ascending: false }).limit(500),
             supabase.rpc('get_popular_topics', { limit_count: 6 }),
             supabase.from('interview_sessions').select('*').eq('user_id', user.id).order('created_at', { ascending: false }).limit(20),
+            supabase.from('notebook_entries').select('*').eq('user_id', user.id).order('created_at', { ascending: false }),
         ]);
         if (p) {
             setProfile(p as Profile);
@@ -374,11 +550,13 @@ function AuthedApp({ session }: { session: Session }) {
         if (a) {
             setAttempts(a as Attempt[]);
             setStats(computeStats(a as Attempt[]));
+            setWeaknesses(computeWeaknesses(a as Attempt[]));
         }
         if (pop && Array.isArray(pop)) {
             setPopularTopics(pop.map((row: any) => ({ slug: row.topic as string, attempts: Number(row.attempts) || 0 })));
         }
         if (sessions) setPastInterviews(sessions as InterviewSessionRow[]);
+        if (nb) setNotebookEntries(nb as NotebookEntry[]);
     }, [user.id]);
 
     useEffect(() => { loadAll(); }, [loadAll]);
@@ -584,6 +762,38 @@ function AuthedApp({ session }: { session: Session }) {
         setInterviewEvaluation(null);
     }
 
+    async function saveToNotebook(entry: Omit<NotebookEntry, 'id' | 'created_at' | 'user_id'>) {
+        await addToNotebook({ ...entry, user_id: user.id });
+        loadAll();
+    }
+
+    async function toggleReviewed(id: string, current: boolean) {
+        await updateNotebookEntry(id, { reviewed: !current });
+        loadAll();
+    }
+
+    async function removeFromNotebook(id: string) {
+        await deleteNotebookEntry(id);
+        loadAll();
+    }
+
+    function openNotebook() {
+        setScreen('notebook');
+    }
+
+    function prepareNotebookEntry(question: Question, answer: string, feedback: GradeResult) {
+        setNotebookDraft({
+            question_text: question.question_text,
+            topic: question.topic,
+            my_answer: answer,
+            correct_concept: feedback.missed_concepts.join(', ') || feedback.strong_concepts.join(', ') || '',
+            personal_note: '',
+            missed_concepts: feedback.missed_concepts,
+            score: feedback.score,
+        });
+        setShowNotebookAdder(true);
+    }
+
     return (
         <div className="min-h-screen bg-[#f4efe4] text-stone-900">
             <TopNav current={screen} onNavigate={setScreen} />
@@ -601,6 +811,7 @@ function AuthedApp({ session }: { session: Session }) {
                         difficulty={difficulty}
                         popularTopics={popularTopics}
                         attempts={attempts}
+                        weaknesses={weaknesses}
                         onDifficulty={async (d) => {
                             setDifficulty(d);
                             await supabase.from('profiles').update({ preferred_difficulty: d }).eq('user_id', user.id);
@@ -610,6 +821,7 @@ function AuthedApp({ session }: { session: Session }) {
                         pastInterviews={pastInterviews}
                         onOpenPastInterview={setViewingSession}
                         loading={loading}
+                        onOpenNotebook={openNotebook}
                     />
                 )}
 
@@ -640,6 +852,7 @@ function AuthedApp({ session }: { session: Session }) {
                         onFinish={finishSession}
                         onExit={goDashboard}
                         loading={loading}
+                        onAddToNotebook={() => prepareNotebookEntry(question, answer, feedback)}
                     />
                 )}
 
@@ -680,12 +893,39 @@ function AuthedApp({ session }: { session: Session }) {
                         onProfileChange={loadAll}
                     />
                 )}
+
+                {screen === 'notebook' && (
+                    <NotebookScreen
+                        entries={notebookEntries}
+                        weaknesses={weaknesses}
+                        onToggleReviewed={toggleReviewed}
+                        onDelete={removeFromNotebook}
+                        onPractice={(topic) => { setScreen('dashboard'); startSession(topic); }}
+                        onBack={() => setScreen('dashboard')}
+                    />
+                )}
             </main>
 
             {showInterviewPicker && (
                 <InterviewPicker
                     onCancel={() => setShowInterviewPicker(false)}
                     onPick={beginInterview}
+                />
+            )}
+
+            {showNotebookAdder && (
+                <NotebookAdder
+                    draft={notebookDraft}
+                    onChange={setNotebookDraft}
+                    onSave={async () => {
+                        await saveToNotebook(notebookDraft);
+                        setShowNotebookAdder(false);
+                        setNotebookDraft({ question_text: '', topic: '', my_answer: '', correct_concept: '', personal_note: '', missed_concepts: [], score: 0 });
+                    }}
+                    onCancel={() => {
+                        setShowNotebookAdder(false);
+                        setNotebookDraft({ question_text: '', topic: '', my_answer: '', correct_concept: '', personal_note: '', missed_concepts: [], score: 0 });
+                    }}
                 />
             )}
 
@@ -720,6 +960,7 @@ function TopNav({ current, onNavigate }: { current: Screen; onNavigate: (s: Scre
                 </button>
                 <nav className="flex items-center gap-5">
                     {link('Dashboard', 'dashboard')}
+                    {link('Notebook', 'notebook')}
                     {link('Profile', 'profile')}
                 </nav>
             </div>
@@ -732,20 +973,22 @@ function TopNav({ current, onNavigate }: { current: Screen; onNavigate: (s: Scre
 // ============================================================
 
 function Dashboard({
-    displayName, stats, difficulty, popularTopics, attempts,
-    onDifficulty, onStart, onStartInterview, pastInterviews, onOpenPastInterview, loading,
+    displayName, stats, difficulty, popularTopics, attempts, weaknesses,
+    onDifficulty, onStart, onStartInterview, pastInterviews, onOpenPastInterview, loading, onOpenNotebook,
 }: {
     displayName: string;
     stats: Stats;
     difficulty: Difficulty;
     popularTopics: { slug: string; attempts: number }[];
     attempts: Attempt[];
+    weaknesses: WeaknessAnalysis[];
     onDifficulty: (d: Difficulty) => void;
     onStart: (topic: Topic) => void;
     onStartInterview: () => void;
     pastInterviews: InterviewSessionRow[];
     onOpenPastInterview: (s: InterviewSessionRow) => void;
     loading: boolean;
+    onOpenNotebook: () => void;
 }) {
     const [customTopic, setCustomTopic] = useState('');
     const [showSuggestions, setShowSuggestions] = useState(false);
@@ -802,6 +1045,33 @@ function Dashboard({
                     <div className="mt-1 text-2xl font-semibold tracking-tight">{stats.accuracy}%</div>
                 </div>
             </div>
+
+            {weaknesses.length > 0 && (
+                <section className="rounded-2xl border border-amber-200 bg-amber-50 p-6">
+                    <div className="flex items-center justify-between">
+                        <div>
+                            <h2 className="text-sm font-semibold uppercase tracking-wide text-amber-800">Focus areas</h2>
+                            <p className="mt-1 text-xs text-amber-700">Based on your missed concepts</p>
+                        </div>
+                        <button onClick={onOpenNotebook} className="text-xs font-medium text-amber-900 underline underline-offset-2">
+                            View notebook →
+                        </button>
+                    </div>
+                    <div className="mt-3 flex flex-wrap gap-2">
+                        {weaknesses.slice(0, 5).map((w) => (
+                            <button
+                                key={w.concept}
+                                onClick={() => onStart(w.suggested_topic)}
+                                disabled={loading}
+                                className="rounded-full border border-amber-200 bg-white px-3 py-1.5 text-xs font-medium text-amber-900 transition hover:border-amber-300 disabled:opacity-50"
+                            >
+                                {w.suggested_topic}
+                                <span className="ml-1.5 text-amber-600">({w.times_missed}×)</span>
+                            </button>
+                        ))}
+                    </div>
+                </section>
+            )}
 
             <section className="rounded-2xl border border-stone-200 bg-white p-6">
                 <div className="flex items-center justify-between">
@@ -1032,7 +1302,7 @@ function QuestionScreen({ question, answer, onAnswer, hint, loading, questionInd
     );
 }
 
-function FeedbackScreen({ question, answer, feedback, videos, questionIndex, sessionLength, onNext, onFinish, onExit, loading }: { question: Question; answer: string; feedback: GradeResult; videos: Video[]; questionIndex: number; sessionLength: number; onNext: () => void; onFinish: () => void; onExit: () => void; loading: boolean; }) {
+function FeedbackScreen({ question, answer, feedback, videos, questionIndex, sessionLength, onNext, onFinish, onExit, loading, onAddToNotebook }: { question: Question; answer: string; feedback: GradeResult; videos: Video[]; questionIndex: number; sessionLength: number; onNext: () => void; onFinish: () => void; onExit: () => void; loading: boolean; onAddToNotebook?: () => void; }) {
     const verdictLabel = feedback.verdict === 'correct' ? 'Correct' : feedback.verdict === 'partial' ? 'Partially correct' : 'Incorrect';
     const verdictStyles = feedback.verdict === 'correct' ? 'border-emerald-200 bg-emerald-50 text-emerald-800' : feedback.verdict === 'partial' ? 'border-amber-200 bg-amber-50 text-amber-800' : 'border-red-200 bg-red-50 text-red-800';
     const isLast = questionIndex >= sessionLength;
@@ -1067,6 +1337,14 @@ function FeedbackScreen({ question, answer, feedback, videos, questionIndex, ses
                             {feedback.missed_concepts.map((c) => <li key={c}>· {c}</li>)}
                         </ul>
                     </div>
+                )}
+                {onAddToNotebook && (
+                    <button
+                        onClick={onAddToNotebook}
+                        className="mt-4 inline-flex items-center gap-1.5 rounded-lg border border-stone-200 bg-stone-50 px-3 py-1.5 text-xs font-medium text-stone-700 transition hover:border-stone-300 hover:bg-white"
+                    >
+                        📝 Add to mistake notebook
+                    </button>
                 )}
                 {feedback.xp_earned > 0 && <div className="mt-4 text-xs text-stone-500">+{feedback.xp_earned} XP earned</div>}
             </div>
@@ -1231,6 +1509,90 @@ function SessionSummaryScreen({ topic, results, onDone }: { topic: string; resul
                 </button>
             </div>
         </div>
+    );
+}
+
+// ============================================================
+// Notebook Adder Modal
+// ============================================================
+
+function NotebookAdder({
+    draft, onChange, onSave, onCancel,
+}: {
+    draft: { question_text: string; topic: string; my_answer: string; correct_concept: string; personal_note: string; missed_concepts: string[]; score: number };
+    onChange: (d: typeof draft) => void;
+    onSave: () => void;
+    onCancel: () => void;
+}) {
+    return createPortal(
+        <div className="fixed inset-0 z-[9999] flex items-center justify-center bg-stone-900/40 backdrop-blur-sm p-4" onClick={onCancel}>
+            <div className="max-h-[90vh] w-full max-w-lg overflow-y-auto rounded-2xl border border-stone-200 bg-white p-6 shadow-xl" onClick={(e) => e.stopPropagation()}>
+                <div className="mb-4 flex items-center justify-between">
+                    <div>
+                        <h3 className="text-base font-semibold">Add to mistake notebook</h3>
+                        <p className="text-xs text-stone-500">Write down what you learned so you don't forget.</p>
+                    </div>
+                    <button onClick={onCancel} className="text-stone-500 hover:text-stone-800">✕</button>
+                </div>
+
+                <div className="space-y-4">
+                    <div className="rounded-xl border border-stone-100 bg-stone-50 p-3">
+                        <div className="text-xs font-semibold uppercase tracking-wide text-stone-500">Question</div>
+                        <p className="mt-1 text-sm text-stone-800">{draft.question_text}</p>
+                    </div>
+
+                    <div>
+                        <label className="mb-1 block text-xs font-medium uppercase tracking-wide text-stone-600">My answer</label>
+                        <textarea
+                            value={draft.my_answer}
+                            onChange={(e) => onChange({ ...draft, my_answer: e.target.value })}
+                            rows={3}
+                            className="w-full resize-none rounded-lg border border-stone-200 bg-white px-3 py-2 text-sm text-stone-900 placeholder-stone-400 focus:border-stone-400 focus:outline-none"
+                        />
+                    </div>
+
+                    <div>
+                        <label className="mb-1 block text-xs font-medium uppercase tracking-wide text-stone-600">Correct concept / What I missed</label>
+                        <textarea
+                            value={draft.correct_concept}
+                            onChange={(e) => onChange({ ...draft, correct_concept: e.target.value })}
+                            placeholder="e.g. useEffect cleanup runs before re-render or unmount"
+                            rows={2}
+                            className="w-full resize-none rounded-lg border border-stone-200 bg-white px-3 py-2 text-sm text-stone-900 placeholder-stone-400 focus:border-stone-400 focus:outline-none"
+                        />
+                    </div>
+
+                    <div>
+                        <label className="mb-1 block text-xs font-medium uppercase tracking-wide text-stone-600">Personal note</label>
+                        <textarea
+                            value={draft.personal_note}
+                            onChange={(e) => onChange({ ...draft, personal_note: e.target.value })}
+                            placeholder="e.g. I always forget the dependency array. Need to practice this pattern."
+                            rows={2}
+                            className="w-full resize-none rounded-lg border border-stone-200 bg-white px-3 py-2 text-sm text-stone-900 placeholder-stone-400 focus:border-stone-400 focus:outline-none"
+                        />
+                    </div>
+
+                    {draft.missed_concepts.length > 0 && (
+                        <div className="flex flex-wrap gap-1.5">
+                            {draft.missed_concepts.map((c) => (
+                                <span key={c} className="rounded-full border border-amber-200 bg-amber-50 px-2 py-0.5 text-[10px] font-medium text-amber-800">
+                                    {c}
+                                </span>
+                            ))}
+                        </div>
+                    )}
+                </div>
+
+                <div className="mt-6 flex gap-2">
+                    <button onClick={onCancel} className="flex-1 rounded-lg border border-stone-200 bg-white px-4 py-2 text-sm text-stone-700 hover:border-stone-300">Cancel</button>
+                    <button onClick={onSave} className="flex-1 rounded-lg bg-stone-900 px-4 py-2 text-sm font-medium text-white hover:bg-stone-800">
+                        Save entry
+                    </button>
+                </div>
+            </div>
+        </div>,
+        document.body
     );
 }
 
@@ -1672,6 +2034,201 @@ function PastInterviewViewer({ session, onClose }: { session: InterviewSessionRo
 }
 
 // ============================================================
+// Notebook Screen
+// ============================================================
+
+function NotebookScreen({
+    entries, weaknesses, onToggleReviewed, onDelete, onPractice, onBack,
+}: {
+    entries: NotebookEntry[];
+    weaknesses: WeaknessAnalysis[];
+    onToggleReviewed: (id: string, current: boolean) => void;
+    onDelete: (id: string) => void;
+    onPractice: (topic: string) => void;
+    onBack: () => void;
+}) {
+    const [filter, setFilter] = useState<'all' | 'reviewed' | 'pending'>('all');
+    const [expanded, setExpanded] = useState<string | null>(null);
+
+    const filtered = entries.filter((e) => {
+        if (filter === 'reviewed') return e.reviewed;
+        if (filter === 'pending') return !e.reviewed;
+        return true;
+    });
+
+    const topics = useMemo(() => {
+        const map = new Map<string, number>();
+        entries.forEach((e) => {
+            map.set(e.topic, (map.get(e.topic) || 0) + 1);
+        });
+        return [...map.entries()].sort((a, b) => b[1] - a[1]);
+    }, [entries]);
+
+    return (
+        <div className="space-y-6">
+            <div className="flex items-center gap-3">
+                <button onClick={onBack} className="inline-flex items-center gap-1 text-sm text-stone-500 transition hover:text-stone-900">← Back</button>
+            </div>
+
+            <div>
+                <div className="text-xs uppercase tracking-wide text-stone-500">Mistake notebook</div>
+                <h1 className="mt-1 text-2xl font-semibold tracking-tight">Learn from mistakes</h1>
+                <p className="mt-1 text-sm text-stone-500">Review what you got wrong and practice weak areas.</p>
+            </div>
+
+            {/* Weakness overview */}
+            {weaknesses.length > 0 && (
+                <section className="rounded-2xl border border-stone-200 bg-white p-6">
+                    <h2 className="text-sm font-semibold uppercase tracking-wide text-stone-500">Weakest concepts</h2>
+                    <p className="mt-1 text-xs text-stone-500">Concepts you miss most often across all sessions</p>
+                    <div className="mt-4 space-y-3">
+                        {weaknesses.slice(0, 6).map((w) => (
+                            <div key={w.concept} className="flex items-center justify-between rounded-xl border border-stone-100 bg-stone-50 px-4 py-3">
+                                <div className="min-w-0">
+                                    <div className="text-sm font-medium text-stone-900 capitalize">{w.concept}</div>
+                                    <div className="text-xs text-stone-500">from {labelFor(w.topic)} · missed {w.times_missed}×</div>
+                                </div>
+                                <button
+                                    onClick={() => onPractice(w.suggested_topic)}
+                                    className="shrink-0 rounded-lg bg-stone-900 px-3 py-1.5 text-xs font-medium text-white transition hover:bg-stone-800"
+                                >
+                                    Practice
+                                </button>
+                            </div>
+                        ))}
+                    </div>
+                </section>
+            )}
+
+            {/* Topic breakdown */}
+            {topics.length > 0 && (
+                <section className="rounded-2xl border border-stone-200 bg-white p-6">
+                    <h2 className="text-sm font-semibold uppercase tracking-wide text-stone-500">By topic</h2>
+                    <div className="mt-3 flex flex-wrap gap-2">
+                        {topics.map(([topic, count]) => (
+                            <button
+                                key={topic}
+                                onClick={() => onPractice(topic)}
+                                className="rounded-full border border-stone-200 bg-white px-3 py-1 text-xs text-stone-700 transition hover:border-stone-300"
+                            >
+                                {labelFor(topic)} <span className="text-stone-400">({count})</span>
+                            </button>
+                        ))}
+                    </div>
+                </section>
+            )}
+
+            {/* Entries list */}
+            <section className="rounded-2xl border border-stone-200 bg-white p-6">
+                <div className="flex items-center justify-between">
+                    <h2 className="text-sm font-semibold uppercase tracking-wide text-stone-500">Your entries</h2>
+                    <div className="flex gap-1 rounded-lg border border-stone-200 bg-stone-50 p-0.5">
+                        {(['all', 'pending', 'reviewed'] as const).map((f) => (
+                            <button
+                                key={f}
+                                onClick={() => setFilter(f)}
+                                className={`rounded-md px-2.5 py-1 text-xs font-medium capitalize transition ${filter === f ? 'bg-white text-stone-900 shadow-sm' : 'text-stone-500 hover:text-stone-800'}`}
+                            >
+                                {f}
+                            </button>
+                        ))}
+                    </div>
+                </div>
+
+                {filtered.length === 0 ? (
+                    <div className="mt-6 text-center">
+                        <div className="text-sm text-stone-500">No entries yet.</div>
+                        <p className="mt-1 text-xs text-stone-400">Answer questions and click "Add to mistake notebook" to build your personal study guide.</p>
+                    </div>
+                ) : (
+                    <div className="mt-4 space-y-3">
+                        {filtered.map((entry) => {
+                            const isOpen = expanded === entry.id;
+                            return (
+                                <div
+                                    key={entry.id}
+                                    className={`rounded-xl border p-4 transition ${entry.reviewed ? 'border-stone-100 bg-stone-50/50' : 'border-stone-200 bg-white'}`}
+                                >
+                                    <div className="flex items-start justify-between gap-3">
+                                        <div className="min-w-0 flex-1">
+                                            <div className="flex items-center gap-2">
+                                                <span className={`h-2 w-2 shrink-0 rounded-full ${entry.reviewed ? 'bg-emerald-400' : 'bg-amber-400'}`} />
+                                                <span className="truncate text-sm font-medium text-stone-900">{entry.question_text}</span>
+                                            </div>
+                                            <div className="mt-1 flex items-center gap-2 text-xs text-stone-500">
+                                                <span className="capitalize">{labelFor(entry.topic)}</span>
+                                                <span>·</span>
+                                                <span>Scored {entry.score}/10</span>
+                                                {entry.missed_concepts.length > 0 && (
+                                                    <>
+                                                        <span>·</span>
+                                                        <span className="text-amber-600">{entry.missed_concepts.join(', ')}</span>
+                                                    </>
+                                                )}
+                                            </div>
+                                        </div>
+                                        <div className="flex shrink-0 items-center gap-1">
+                                            <button
+                                                onClick={() => onToggleReviewed(entry.id, entry.reviewed)}
+                                                title={entry.reviewed ? 'Mark as not reviewed' : 'Mark as reviewed'}
+                                                className="rounded-lg p-1.5 text-stone-400 transition hover:bg-stone-100 hover:text-stone-700"
+                                            >
+                                                {entry.reviewed ? '✓' : '○'}
+                                            </button>
+                                            <button
+                                                onClick={() => setExpanded(isOpen ? null : entry.id)}
+                                                className="rounded-lg p-1.5 text-stone-400 transition hover:bg-stone-100 hover:text-stone-700"
+                                            >
+                                                {isOpen ? '▲' : '▼'}
+                                            </button>
+                                            <button
+                                                onClick={() => onDelete(entry.id)}
+                                                className="rounded-lg p-1.5 text-stone-400 transition hover:bg-red-50 hover:text-red-600"
+                                            >
+                                                🗑
+                                            </button>
+                                        </div>
+                                    </div>
+
+                                    {isOpen && (
+                                        <div className="mt-3 space-y-3 border-t border-stone-100 pt-3">
+                                            <div>
+                                                <div className="text-xs font-semibold uppercase tracking-wide text-stone-500">My answer</div>
+                                                <p className="mt-1 text-sm italic text-stone-700">"{entry.my_answer}"</p>
+                                            </div>
+                                            {entry.correct_concept && (
+                                                <div>
+                                                    <div className="text-xs font-semibold uppercase tracking-wide text-emerald-700">Correct concept</div>
+                                                    <p className="mt-1 text-sm text-stone-800">{entry.correct_concept}</p>
+                                                </div>
+                                            )}
+                                            {entry.personal_note && (
+                                                <div>
+                                                    <div className="text-xs font-semibold uppercase tracking-wide text-stone-500">My note</div>
+                                                    <p className="mt-1 text-sm text-stone-800">{entry.personal_note}</p>
+                                                </div>
+                                            )}
+                                            <div className="flex gap-2 pt-1">
+                                                <button
+                                                    onClick={() => onPractice(entry.topic)}
+                                                    className="rounded-lg bg-stone-900 px-3 py-1.5 text-xs font-medium text-white transition hover:bg-stone-800"
+                                                >
+                                                    Practice this topic
+                                                </button>
+                                            </div>
+                                        </div>
+                                    )}
+                                </div>
+                            );
+                        })}
+                    </div>
+                )}
+            </section>
+        </div>
+    );
+}
+
+// ============================================================
 // Profile
 // ============================================================
 
@@ -1707,7 +2264,6 @@ function ProfileScreen({ profile, email, stats, attemptsCount, onProfileChange }
                 <SettingRow label="Display name" value={profile.display_name || '—'} onClick={() => setModal('display_name')} />
                 <SettingRow label="Email" value={email} onClick={() => setModal('email')} />
                 <SettingRow label="Change password" value="" onClick={() => setModal('password')} />
-                <SettingRow label="Notification preferences" value={profile.email_notifications ? 'On' : 'Off'} onClick={() => setModal('notifications')} />
                 <SettingRow label="Preferred difficulty" value={profile.preferred_difficulty} onClick={() => setModal('difficulty')} />
             </section>
 
@@ -1750,7 +2306,6 @@ function SettingRow({ label, value, onClick }: { label: string; value: string; o
 function SettingModal({ modal, profile, email, busy, setBusy, onClose, onDone }: { modal: Exclude<Modal, null>; profile: Profile; email: string; busy: boolean; setBusy: (b: boolean) => void; onClose: () => void; onDone: (msg: string) => void; }) {
     const [displayName, setDisplayName] = useState(profile.display_name || '');
     const [newEmail, setNewEmail] = useState(email);
-    const [notifOn, setNotifOn] = useState(profile.email_notifications);
     const [diff, setDiff] = useState<Difficulty>(profile.preferred_difficulty);
     const [error, setError] = useState<string | null>(null);
 
@@ -1767,13 +2322,10 @@ function SettingModal({ modal, profile, email, busy, setBusy, onClose, onDone }:
                 if (error) throw error;
                 onDone('Check both inboxes to confirm the change');
             } else if (modal === 'password') {
-                const { error } = await supabase.auth.resetPasswordForEmail(email, { redirectTo: window.location.origin });
+                const appUrl = typeof window !== 'undefined' ? window.location.origin : '';
+                const { error } = await supabase.auth.resetPasswordForEmail(email, { redirectTo: `${appUrl}/auth/callback` });
                 if (error) throw error;
                 onDone(`Password reset link sent to ${email}. Check your inbox and click the link to set a new password.`);
-            } else if (modal === 'notifications') {
-                const { error } = await supabase.from('profiles').update({ email_notifications: notifOn }).eq('user_id', profile.user_id);
-                if (error) throw error;
-                onDone('Notification preferences saved');
             } else if (modal === 'difficulty') {
                 const { error } = await supabase.from('profiles').update({ preferred_difficulty: diff }).eq('user_id', profile.user_id);
                 if (error) throw error;
@@ -1790,7 +2342,6 @@ function SettingModal({ modal, profile, email, busy, setBusy, onClose, onDone }:
         display_name: 'Change display name',
         email: 'Change email',
         password: 'Change password',
-        notifications: 'Email notifications',
         difficulty: 'Preferred difficulty',
     };
     const ctaLabel = modal === 'password' ? 'Send reset link' : 'Save';
@@ -1809,12 +2360,6 @@ function SettingModal({ modal, profile, email, busy, setBusy, onClose, onDone }:
                     <p className="text-sm leading-relaxed text-stone-700">
                         We'll email a secure password reset link to <b>{email}</b>. Click it to set a new password.
                     </p>
-                )}
-                {modal === 'notifications' && (
-                    <label className="flex items-center gap-3 text-sm">
-                        <input type="checkbox" checked={notifOn} onChange={(e) => setNotifOn(e.target.checked)} className="h-4 w-4" />
-                        Receive practice reminders by email
-                    </label>
                 )}
                 {modal === 'difficulty' && (
                     <div className="flex gap-2">
