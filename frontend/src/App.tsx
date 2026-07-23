@@ -545,8 +545,11 @@ function AuthedApp({ session }: { session: Session }) {
     }
 
     async function endInterview() {
-        if (interviewTranscript.length < 2) {
-            setError('Answer at least one question before ending the interview.');
+        const hasAnswered = interviewTranscript.some((t) => t.role === 'candidate');
+        if (!hasAnswered) {
+            setScreen('dashboard');
+            setInterviewTranscript([]);
+            setInterviewFocus('');
             return;
         }
         setEvaluatingInterview(true);
@@ -856,12 +859,12 @@ function Dashboard({
                             onFocus={() => setShowSuggestions(true)}
                             onBlur={() => setTimeout(() => setShowSuggestions(false), 150)}
                             placeholder="e.g. React hooks, Kubernetes, TLS handshake"
-                            className="flex-1 rounded-lg border border-stone-200 bg-white px-3 py-2 text-sm placeholder-stone-400 focus:border-stone-400 focus:outline-none"
+                            className="min-w-0 flex-1 rounded-lg border border-stone-200 bg-white px-3 py-2 text-sm placeholder-stone-400 focus:border-stone-400 focus:outline-none"
                         />
                         <button
                             type="submit"
                             disabled={loading || !customTopic.trim()}
-                            className="rounded-lg bg-stone-900 px-4 py-2 text-sm font-medium text-white transition hover:bg-stone-800 disabled:opacity-50"
+                            className="shrink-0 rounded-lg bg-stone-900 px-4 py-2 text-sm font-medium text-white transition hover:bg-stone-800 disabled:opacity-50"
                         >
                             {loading ? '…' : 'Start'}
                         </button>

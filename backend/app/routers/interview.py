@@ -108,9 +108,10 @@ def next_turn(req: NextTurnRequest) -> NextTurnResponse:
 
 @router.post("/evaluate", response_model=EvaluateResponse)
 def evaluate(req: EvaluateRequest) -> EvaluateResponse:
-    if len(req.transcript) < 2:
+    candidate_turns = [t for t in req.transcript if t.role == "candidate"]
+    if len(candidate_turns) < 1:
         raise HTTPException(
-            status_code=400, detail="Need at least 2 turns to evaluate"
+            status_code=400, detail="No answers to evaluate yet"
         )
     try:
         result = gemini_client.interview_evaluate(
