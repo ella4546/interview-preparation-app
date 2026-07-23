@@ -2045,7 +2045,7 @@ function PastInterviewViewer({ session, onClose }: { session: InterviewSessionRo
 // ============================================================
 
 function NotebookScreen({
-    entries, weaknesses, onToggleReviewed, onDelete, onPractice, onBack,
+    entries, weaknesses, onToggleReviewed, onDelete, onPractice,
 }: {
     entries: NotebookEntry[];
     weaknesses: WeaknessAnalysis[];
