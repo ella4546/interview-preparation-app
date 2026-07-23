@@ -222,7 +222,7 @@ function AuthScreens() {
     return (
         <div className="min-h-screen bg-[#f4efe4]">
             <header className="border-b border-stone-200">
-                <div className="mx-auto max-w-3xl px-6 py-4">
+                <div className="mx-auto flex max-w-3xl items-center justify-center px-6 py-4">
                     <span className="text-base font-semibold tracking-tight">Interview prep</span>
                 </div>
             </header>
@@ -961,35 +961,35 @@ function StreakCalendar({ attempts, stats, onClose }: { attempts: Attempt[]; sta
     const monthLabel = today.toLocaleDateString(undefined, { month: 'long', year: 'numeric' });
 
     return createPortal(
-        <div className="fixed inset-0 z-[9999] flex items-center justify-center bg-stone-900/40 backdrop-blur-sm" onClick={onClose}>
-            <div className="w-full max-w-md rounded-2xl border border-stone-200 bg-white p-6 shadow-xl" onClick={(e) => e.stopPropagation()}>
-                <div className="mb-4 flex items-center justify-between">
+        <div className="fixed inset-0 z-[9999] flex items-center justify-center bg-stone-900/40 backdrop-blur-sm p-4" onClick={onClose}>
+            <div className="w-full max-w-[20rem] rounded-2xl border border-stone-200 bg-white p-4 shadow-xl" onClick={(e) => e.stopPropagation()}>
+                <div className="mb-3 flex items-center justify-between">
                     <div>
-                        <h3 className="text-base font-semibold">Your streak</h3>
-                        <p className="text-xs text-stone-500">Last 12 weeks · {monthLabel}</p>
+                        <h3 className="text-sm font-semibold">Your streak</h3>
+                        <p className="text-[10px] text-stone-500">Last 12 weeks · {monthLabel}</p>
                     </div>
-                    <button onClick={onClose} className="text-stone-500 hover:text-stone-800">✕</button>
+                    <button onClick={onClose} className="text-stone-500 hover:text-stone-800 text-xs">✕</button>
                 </div>
-                <div className="mb-4 grid grid-cols-3 gap-3">
+                <div className="mb-3 grid grid-cols-3 gap-2">
                     <Stat label="Current" value={`${stats.streak} d`} />
                     <Stat label="Solved" value={stats.solved.toString()} />
                     <Stat label="Days active" value={activeDays.size.toString()} />
                 </div>
-                <div className="flex gap-1">
+                <div className="flex gap-[3px] justify-center">
                     {weeks.map((week, wi) => (
-                        <div key={wi} className="flex flex-col gap-1">
+                        <div key={wi} className="flex flex-col gap-[3px]">
                             {week.map((cell) => (
-                                <div key={cell.key} title={`${cell.key}${cell.active ? ` · ${cell.count} attempt${cell.count === 1 ? '' : 's'}` : ' · no activity'}`} className={`h-3 w-3 rounded-sm ${cell.count === 0 ? 'bg-stone-100' : cell.count < 3 ? 'bg-emerald-200' : cell.count < 6 ? 'bg-emerald-400' : 'bg-emerald-600'}`} />
+                                <div key={cell.key} title={`${cell.key}${cell.active ? ` · ${cell.count} attempt${cell.count === 1 ? '' : 's'}` : ' · no activity'}`} className={`h-2.5 w-2.5 rounded-[2px] ${cell.count === 0 ? 'bg-stone-100' : cell.count < 3 ? 'bg-emerald-200' : cell.count < 6 ? 'bg-emerald-400' : 'bg-emerald-600'}`} />
                             ))}
                         </div>
                     ))}
                 </div>
-                <div className="mt-4 flex items-center justify-end gap-2 text-xs text-stone-500">
+                <div className="mt-3 flex items-center justify-end gap-1.5 text-[10px] text-stone-500">
                     <span>Less</span>
-                    <div className="h-3 w-3 rounded-sm bg-stone-100" />
-                    <div className="h-3 w-3 rounded-sm bg-emerald-200" />
-                    <div className="h-3 w-3 rounded-sm bg-emerald-400" />
-                    <div className="h-3 w-3 rounded-sm bg-emerald-600" />
+                    <div className="h-2.5 w-2.5 rounded-[2px] bg-stone-100" />
+                    <div className="h-2.5 w-2.5 rounded-[2px] bg-emerald-200" />
+                    <div className="h-2.5 w-2.5 rounded-[2px] bg-emerald-400" />
+                    <div className="h-2.5 w-2.5 rounded-[2px] bg-emerald-600" />
                     <span>More</span>
                 </div>
             </div>
