@@ -309,6 +309,15 @@ export default function App() {
     useEffect(() => {
         supabase.auth.getSession().then(({ data }) => {
             setSession(data.session);
+
+            // Check if user arrived via recovery link
+            const isRecovery =
+                window.location.search.includes('type=recovery') ||
+                window.location.hash.includes('type=recovery');
+            if (isRecovery) {
+                setRecoveryMode(true);
+            }
+
             setChecking(false);
         });
         const { data: sub } = supabase.auth.onAuthStateChange((event, s) => {
@@ -365,7 +374,7 @@ function AuthScreens() {
             } else {
                 const appUrl = typeof window !== 'undefined' ? window.location.origin : '';
                 const { error } = await supabase.auth.resetPasswordForEmail(email, {
-                    redirectTo: `${appUrl}/auth/callback`,
+                    redirectTo: `${appUrl}/auth/callback?type=recovery`,
                 });
                 if (error) throw error;
                 setInfo('Check your inbox for a password reset link.');
@@ -438,6 +447,12 @@ function Field({ label, value, onChange, type = 'text', placeholder, required, m
 }
 
 function PasswordRecoveryScreen({ onDone }: { onDone: () => void }) {
+    useEffect(() => {
+        if (window.history.replaceState) {
+            window.history.replaceState({}, document.title, window.location.pathname);
+        }
+    }, []);
+
     const [pw, setPw] = useState('');
     const [error, setError] = useState<string | null>(null);
     const [busy, setBusy] = useState(false);
@@ -2048,19 +2063,11 @@ function NotebookScreen({
         return true;
     });
 
-    const topics = useMemo(() => {
-        const map = new Map<string, number>();
-        entries.forEach((e) => {
-            map.set(e.topic, (map.get(e.topic) || 0) + 1);
-        });
-        return [...map.entries()].sort((a, b) => b[1] - a[1]);
-    }, [entries]);
+
 
     return (
         <div className="space-y-6">
-            <div className="flex items-center gap-3">
-                <button onClick={onBack} className="inline-flex items-center gap-1 text-sm text-stone-500 transition hover:text-stone-900">← Back</button>
-            </div>
+
 
             <div>
                 <div className="text-xs uppercase tracking-wide text-stone-500">Mistake notebook</div>
@@ -2092,23 +2099,6 @@ function NotebookScreen({
                 </section>
             )}
 
-            {/* Topic breakdown */}
-            {topics.length > 0 && (
-                <section className="rounded-2xl border border-stone-200 bg-white p-6">
-                    <h2 className="text-sm font-semibold uppercase tracking-wide text-stone-500">By topic</h2>
-                    <div className="mt-3 flex flex-wrap gap-2">
-                        {topics.map(([topic, count]) => (
-                            <button
-                                key={topic}
-                                onClick={() => onPractice(topic)}
-                                className="rounded-full border border-stone-200 bg-white px-3 py-1 text-xs text-stone-700 transition hover:border-stone-300"
-                            >
-                                {labelFor(topic)} <span className="text-stone-400">({count})</span>
-                            </button>
-                        ))}
-                    </div>
-                </section>
-            )}
 
             {/* Entries list */}
             <section className="rounded-2xl border border-stone-200 bg-white p-6">
@@ -2163,21 +2153,28 @@ function NotebookScreen({
                                             <button
                                                 onClick={() => onToggleReviewed(entry.id, entry.reviewed)}
                                                 title={entry.reviewed ? 'Mark as not reviewed' : 'Mark as reviewed'}
-                                                className="rounded-lg p-1.5 text-stone-400 transition hover:bg-stone-100 hover:text-stone-700"
+                                                className="rounded-lg p-1.5 transition hover:bg-stone-100"
                                             >
-                                                {entry.reviewed ? '✓' : '○'}
+                                                <svg width="16" height="16" viewBox="0 0 16 16" fill="none" className={entry.reviewed ? 'text-emerald-500' : 'text-stone-300'}>
+                                                    <circle cx="8" cy="8" r="7" stroke="currentColor" strokeWidth="1.5" />
+                                                    {entry.reviewed && <path d="M5 8l2 2 4-4" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />}
+                                                </svg>
                                             </button>
                                             <button
                                                 onClick={() => setExpanded(isOpen ? null : entry.id)}
-                                                className="rounded-lg p-1.5 text-stone-400 transition hover:bg-stone-100 hover:text-stone-700"
+                                                className="rounded-lg p-1.5 transition hover:bg-stone-100"
                                             >
-                                                {isOpen ? '▲' : '▼'}
+                                                <svg width="16" height="16" viewBox="0 0 16 16" fill="none" className={`text-stone-400 transition-transform ${isOpen ? 'rotate-180' : ''}`}>
+                                                    <path d="M4 6l4 4 4-4" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+                                                </svg>
                                             </button>
                                             <button
                                                 onClick={() => onDelete(entry.id)}
-                                                className="rounded-lg p-1.5 text-stone-400 transition hover:bg-red-50 hover:text-red-600"
+                                                className="rounded-lg p-1.5 transition hover:bg-red-50"
                                             >
-                                                🗑
+                                                <svg width="16" height="16" viewBox="0 0 16 16" fill="none" className="text-stone-400 hover:text-red-500 transition">
+                                                    <path d="M3 5h10M6 5V3a1 1 0 011-1h2a1 1 0 011 1v2m2 0v9a1 1 0 01-1 1H5a1 1 0 01-1-1V5h8z" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+                                                </svg>
                                             </button>
                                         </div>
                                     </div>
@@ -2315,7 +2312,9 @@ function SettingModal({ modal, profile, email, busy, setBusy, onClose, onDone }:
                 onDone('Check both inboxes to confirm the change');
             } else if (modal === 'password') {
                 const appUrl = typeof window !== 'undefined' ? window.location.origin : '';
-                const { error } = await supabase.auth.resetPasswordForEmail(email, { redirectTo: `${appUrl}/auth/callback` });
+                const { error } = await supabase.auth.resetPasswordForEmail(email, {
+                    redirectTo: `${appUrl}/auth/callback?type=recovery`,
+                });
                 if (error) throw error;
                 onDone(`Password reset link sent to ${email}. Check your inbox and click the link to set a new password.`);
             } else if (modal === 'difficulty') {
