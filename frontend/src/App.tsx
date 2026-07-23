@@ -2202,7 +2202,7 @@ function NotebookScreen({
                                                     onClick={() => onPractice(entry.topic)}
                                                     className="rounded-lg bg-stone-900 px-3 py-1.5 text-xs font-medium text-white transition hover:bg-stone-800"
                                                 >
-                                                    Practice this topic
+                                                    Practice 
                                                 </button>
                                             </div>
                                         </div>
